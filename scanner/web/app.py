@@ -1232,6 +1232,15 @@ def debug():
         prices = conn.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
         sched = conn.execute("SELECT COUNT(*) FROM scheduler_runs").fetchone()[0]
         scan_res = conn.execute("SELECT COUNT(*) FROM scan_results").fetchone()[0]
+        scan_row = conn.execute(
+            """
+            SELECT scan_date, computed_at,
+                   LENGTH(result_json) AS json_size,
+                   result_json[:200]   AS json_preview
+            FROM scan_results
+            ORDER BY computed_at DESC LIMIT 1
+            """
+        ).fetchone()
     finally:
         conn.close()
     return {
@@ -1242,6 +1251,12 @@ def debug():
         "prices_count": prices,
         "scheduler_runs_count": sched,
         "scan_results_count": scan_res,
+        "scan_result": {
+            "scan_date": str(scan_row[0]),
+            "computed_at": str(scan_row[1]),
+            "json_size": scan_row[2],
+            "json_preview": scan_row[3],
+        } if scan_row else None,
     }
 
 
