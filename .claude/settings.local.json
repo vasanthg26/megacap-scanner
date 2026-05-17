@@ -22,7 +22,10 @@
       "Bash(pkill -f \"scanner\")",
       "Bash(netstat -ano)",
       "Bash(taskkill /PID 12368 /F)",
-      "Bash(pip show *)"
+      "Bash(pip show *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
