@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import os
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -1214,6 +1215,32 @@ def api_status():
         "scheduler_running": sched["running"],
         "jobs": sched["jobs"],
         "cache_keys": list(_cache.keys()),
+    }
+
+
+@app.get("/api/debug")
+def debug():
+    from scanner.db import get_connection
+
+    db_path = os.environ.get("DATABASE_PATH", "data/scanner.duckdb")
+    db_exists = os.path.exists(db_path)
+    conn = get_connection()
+    try:
+        tables = [r[0] for r in conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+        ).fetchall()]
+        prices = conn.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
+        sched = conn.execute("SELECT COUNT(*) FROM scheduler_runs").fetchone()[0]
+        scan_res = conn.execute("SELECT COUNT(*) FROM scan_results").fetchone()[0]
+    finally:
+        conn.close()
+    return {
+        "db_path": db_path,
+        "db_exists": db_exists,
+        "tables": tables,
+        "prices_count": prices,
+        "scheduler_runs_count": sched,
+        "scan_results_count": scan_res,
     }
 
 
