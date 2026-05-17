@@ -86,61 +86,59 @@ def get_scheduler_info() -> dict:
     et = ZoneInfo("America/New_York")
     running = _scheduler_instance is not None and _scheduler_instance.running
 
-    # Query last run per job from persistent DB storage
+    # Query last run per job from persistent DB — keyed by APScheduler job_id
     db_runs: dict[str, dict] = {}
     try:
         conn = get_connection()
         try:
             for job_id, (name, _lk, _ok) in _JOB_META.items():
                 row = conn.execute(
-                    "SELECT run_time, status FROM scheduler_runs WHERE job_name = ? ORDER BY run_time DESC LIMIT 1",
+                    "SELECT job_name, run_time, status, message FROM scheduler_runs WHERE job_name = ? ORDER BY run_time DESC LIMIT 1",
                     [name],
                 ).fetchone()
                 if row:
-                    db_runs[job_id] = {"run_time": row[0], "status": row[1]}
+                    db_runs[job_id] = {"run_time": row[1], "status": row[2]}
         finally:
             conn.close()
     except Exception as exc:
         logger.error("Failed to query scheduler_runs for status: %s", exc)
 
-    jobs = []
+    # Build next_run_time map from APScheduler (available only while running)
+    next_run_map: dict[str, str | None] = {}
     if _scheduler_instance is not None:
         for job in _scheduler_instance.get_jobs():
-            meta = _JOB_META.get(job.id)
-            if meta is None:
-                continue
-            name, last_key, ok_key = meta
-
-            next_run = None
             if job.next_run_time is not None:
-                next_run = _fmt_dt(job.next_run_time.astimezone(et))
+                next_run_map[job.id] = _fmt_dt(job.next_run_time.astimezone(et))
 
-            db_entry = db_runs.get(job.id)
-            last_run_fmt = None
-            status = "never_run"
+    # Always enumerate all known jobs from _JOB_META so history survives redeploys
+    jobs = []
+    for job_id, (name, last_key, ok_key) in _JOB_META.items():
+        db_entry = db_runs.get(job_id)
+        last_run_fmt = None
+        status = "never_run"
 
-            if db_entry:
-                rt = db_entry["run_time"]
-                if rt.tzinfo is None:
-                    rt = rt.replace(tzinfo=timezone.utc)
-                last_run_fmt = _fmt_dt(rt.astimezone(et))
-                status = "success" if db_entry["status"] == "success" else "failed"
-            else:
-                # Fall back to in-memory if DB query failed
-                last_run_iso = scheduler_status.get(last_key)
-                last_ok = scheduler_status.get(ok_key)
-                if last_run_iso is not None:
-                    dt = datetime.fromisoformat(last_run_iso).replace(tzinfo=timezone.utc).astimezone(et)
-                    last_run_fmt = _fmt_dt(dt)
-                    status = "success" if last_ok is True else "failed"
+        if db_entry:
+            rt = db_entry["run_time"]
+            if rt.tzinfo is None:
+                rt = rt.replace(tzinfo=timezone.utc)
+            last_run_fmt = _fmt_dt(rt.astimezone(et))
+            status = "success" if db_entry["status"] == "success" else "failed"
+        else:
+            # Fall back to in-memory if DB query failed or returned nothing
+            last_run_iso = scheduler_status.get(last_key)
+            last_ok = scheduler_status.get(ok_key)
+            if last_run_iso is not None:
+                dt = datetime.fromisoformat(last_run_iso).replace(tzinfo=timezone.utc).astimezone(et)
+                last_run_fmt = _fmt_dt(dt)
+                status = "success" if last_ok is True else "failed"
 
-            jobs.append({
-                "id": job.id,
-                "name": name,
-                "next_run_time": next_run,
-                "last_run_time": last_run_fmt,
-                "last_run_status": status,
-            })
+        jobs.append({
+            "id": job_id,
+            "name": name,
+            "next_run_time": next_run_map.get(job_id),
+            "last_run_time": last_run_fmt,
+            "last_run_status": status,
+        })
 
     return {"running": running, "jobs": jobs}
 

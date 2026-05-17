@@ -149,6 +149,13 @@ CREATE TABLE IF NOT EXISTS scheduler_runs (
     message   VARCHAR,
     PRIMARY KEY (job_name, run_time)
 );
+
+CREATE TABLE IF NOT EXISTS scan_results (
+    scan_date   DATE      NOT NULL,
+    result_json TEXT      NOT NULL,
+    computed_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (scan_date)
+);
 """
 
 

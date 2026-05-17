@@ -492,13 +492,33 @@ def _compute_journal_sync() -> dict:
     return {"entries": entries}
 
 
+def _persist_scan_to_db(result: dict, scan_date: str) -> None:
+    """Write scan result JSON to scan_results table — survives redeploys."""
+    import json
+    from scanner.db import get_connection
+    try:
+        conn = get_connection()
+        try:
+            conn.execute("DELETE FROM scan_results WHERE scan_date = ?", [scan_date])
+            conn.execute(
+                "INSERT INTO scan_results (scan_date, result_json, computed_at) VALUES (?, ?, ?)",
+                [scan_date, json.dumps(result), datetime.utcnow()],
+            )
+        finally:
+            conn.close()
+        logger.info("  scan result persisted to DB for %s", scan_date)
+    except Exception as exc:
+        logger.error("Failed to persist scan result to DB: %s", exc)
+
+
 def _run_scan_today_sync() -> None:
-    """Compute today's scan + megacap and populate cache. Called after ingestion or on startup."""
+    """Compute today's scan + megacap, populate cache, and persist to DB."""
     today = str(date.today())
     try:
         result = _compute_scan_sync(today)
         _cache_set("scan_today", result)
-        logger.info("  scan cache warm (today=%s, rows=%d)", today, len(result.get("entries", [])))
+        _persist_scan_to_db(result, today)
+        logger.info("  scan cache warm (today=%s, groups=%d)", today, len(result.get("groups", [])))
     except Exception as exc:
         logger.error("scan cache warm failed: %s", exc)
     try:
@@ -573,18 +593,48 @@ def root():
     return FileResponse(str(_STATIC_DIR / "index.html"))
 
 
+def _read_scan_from_db(scan_date: str) -> dict | None:
+    """Read a persisted scan result from DuckDB. Returns None if not found."""
+    import json
+    from scanner.db import get_connection
+    try:
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT result_json FROM scan_results WHERE scan_date = ?",
+                [scan_date],
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            return json.loads(row[0])
+    except Exception as exc:
+        logger.warning("Failed to read scan result from DB for %s: %s", scan_date, exc)
+    return None
+
+
 @app.get("/api/scan")
 async def api_scan(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
     as_of = scan_date or str(date.today())
-    # Serve from cache for today's date; historical dates always recompute
-    if as_of == str(date.today()):
+    today = str(date.today())
+
+    if as_of == today:
+        # 1. In-memory cache
         cached = _cache_get("scan_today")
         if cached is not None:
             return cached
+        # 2. Persisted DB result (survives redeploys)
+        db_result = await asyncio.to_thread(_read_scan_from_db, today)
+        if db_result is not None:
+            _cache_set("scan_today", db_result)
+            return db_result
+
+    # 3. Compute fresh (always for historical dates; fallback for today if DB empty)
     try:
         result = await asyncio.to_thread(_compute_scan_sync, as_of)
-        if as_of == str(date.today()):
+        if as_of == today:
             _cache_set("scan_today", result)
+            await asyncio.to_thread(_persist_scan_to_db, result, today)
         return result
     except Exception as exc:
         logger.error("api_scan failed: %s", exc)

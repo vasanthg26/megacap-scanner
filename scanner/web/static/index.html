@@ -989,16 +989,18 @@ function renderScheduler(data){
   }
 }
 
-(function(){
+document.addEventListener('DOMContentLoaded',function(){
   var toggle=document.getElementById('advanced-toggle');
   var section=document.getElementById('advanced-section');
   if(!toggle||!section)return;
+  section.style.display='none';
+  toggle.textContent='Advanced ▼';
   toggle.addEventListener('click',function(){
     var open=section.style.display!=='none';
     section.style.display=open?'none':'block';
     toggle.textContent=open?'Advanced ▼':'Advanced ▲';
   });
-}());
+});
 
 /* ── Mega-Cap ─────────────────────────── */
 async function loadMegacap(){
