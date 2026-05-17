@@ -492,6 +492,23 @@ def _compute_journal_sync() -> dict:
     return {"entries": entries}
 
 
+def _run_scan_today_sync() -> None:
+    """Compute today's scan + megacap and populate cache. Called after ingestion or on startup."""
+    today = str(date.today())
+    try:
+        result = _compute_scan_sync(today)
+        _cache_set("scan_today", result)
+        logger.info("  scan cache warm (today=%s, rows=%d)", today, len(result.get("entries", [])))
+    except Exception as exc:
+        logger.error("scan cache warm failed: %s", exc)
+    try:
+        mc_result = _compute_scan_megacap_sync()
+        _cache_set("scan_megacap", mc_result)
+        logger.info("  megacap cache warm")
+    except Exception as exc:
+        logger.error("megacap cache warm failed: %s", exc)
+
+
 def _warm_caches_sync() -> None:
     logger.info("Pre-warming caches at startup...")
     try:
@@ -499,6 +516,25 @@ def _warm_caches_sync() -> None:
         logger.info("  journal cache warm")
     except Exception as exc:
         logger.error("journal cache warm failed: %s", exc)
+
+    # Run scan only if today's price data exists
+    try:
+        from scanner.db import get_connection
+        conn = get_connection(read_only=False)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM prices WHERE date = CURRENT_DATE"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        if count > 0:
+            logger.info("  today's prices found (%d rows) — running scan warm", count)
+            _run_scan_today_sync()
+        else:
+            logger.warning("  no price data for today — scan cache skipped")
+    except Exception as exc:
+        logger.error("startup scan check failed: %s", exc)
+
     logger.info("Cache pre-warm complete")
 
 
@@ -540,8 +576,16 @@ def root():
 @app.get("/api/scan")
 async def api_scan(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
     as_of = scan_date or str(date.today())
+    # Serve from cache for today's date; historical dates always recompute
+    if as_of == str(date.today()):
+        cached = _cache_get("scan_today")
+        if cached is not None:
+            return cached
     try:
-        return await asyncio.to_thread(_compute_scan_sync, as_of)
+        result = await asyncio.to_thread(_compute_scan_sync, as_of)
+        if as_of == str(date.today()):
+            _cache_set("scan_today", result)
+        return result
     except Exception as exc:
         logger.error("api_scan failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -549,8 +593,13 @@ async def api_scan(scan_date: str = Query(default=None, description="YYYY-MM-DD"
 
 @app.get("/api/scan-megacap")
 async def api_scan_megacap():
+    cached = _cache_get("scan_megacap")
+    if cached is not None:
+        return cached
     try:
-        return await asyncio.to_thread(_compute_scan_megacap_sync)
+        result = await asyncio.to_thread(_compute_scan_megacap_sync)
+        _cache_set("scan_megacap", result)
+        return result
     except Exception as exc:
         logger.error("api_scan_megacap failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -655,6 +704,15 @@ async def api_run_all():
             logger.error("run-all: %s raised: %s", job_name, exc)
             ok = False
         results.append({"job": job_name, "status": "success" if ok else "failed"})
+
+    # Step 6: compute scan and populate cache so /api/scan returns data immediately
+    try:
+        await asyncio.to_thread(_run_scan_today_sync)
+        results.append({"job": "scan", "status": "success"})
+    except Exception as exc:
+        logger.error("run-all: scan raised: %s", exc)
+        results.append({"job": "scan", "status": "failed"})
+
     any_failed = any(r["status"] != "success" for r in results)
     return {"status": "partial" if any_failed else "complete", "results": results}
 

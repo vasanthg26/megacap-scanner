@@ -1948,8 +1948,8 @@ async function runRefreshAll(){
   toast.style.display='block';
   setTimeout(function(){toast.style.display='none';toast.className='';},5000);
 
-  // reload activity log and scheduler status
-  await Promise.allSettled([loadActivityLog(),loadScheduler()]);
+  // reload scan data, activity log and scheduler status
+  await Promise.allSettled([loadScan(),loadMegacap(),loadActivityLog(),loadScheduler()]);
 }
 
 document.getElementById('refresh-all-btn').addEventListener('click',runRefreshAll);
