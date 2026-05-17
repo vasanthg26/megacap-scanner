@@ -512,14 +512,24 @@ def _persist_scan_to_db(result: dict, scan_date: str) -> None:
         logger.error("Failed to persist scan result to DB: %s", exc)
 
 
-def _run_scan_today_sync() -> None:
-    """Compute today's scan + megacap, populate cache, and persist to DB."""
-    today = str(date.today())
+def _run_scan_today_sync(as_of: str | None = None) -> None:
+    """Compute scan + megacap for as_of date (defaults to most recent price date), populate cache, and persist to DB."""
+    if as_of is None:
+        from scanner.db import get_connection
+        try:
+            conn = get_connection()
+            try:
+                row = conn.execute("SELECT MAX(date) FROM prices").fetchone()
+            finally:
+                conn.close()
+            as_of = str(row[0]) if row and row[0] else str(date.today())
+        except Exception:
+            as_of = str(date.today())
     try:
-        result = _compute_scan_sync(today)
+        result = _compute_scan_sync(as_of)
         _cache_set("scan_today", result)
-        _persist_scan_to_db(result, today)
-        logger.info("  scan cache warm (today=%s, groups=%d)", today, len(result.get("groups", [])))
+        _persist_scan_to_db(result, as_of)
+        logger.info("  scan cache warm (as_of=%s, groups=%d)", as_of, len(result.get("groups", [])))
     except Exception as exc:
         logger.error("scan cache warm failed: %s", exc)
     try:
@@ -614,28 +624,45 @@ def _read_scan_from_db(scan_date: str) -> dict | None:
     return None
 
 
+def _latest_price_date_sync() -> str:
+    """Return the most recent date in prices table, falling back to today."""
+    from scanner.db import get_connection
+    try:
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT MAX(date) FROM prices").fetchone()
+        finally:
+            conn.close()
+        if row and row[0]:
+            return str(row[0])
+    except Exception as exc:
+        logger.warning("_latest_price_date_sync failed: %s", exc)
+    return str(date.today())
+
+
 @app.get("/api/scan")
 async def api_scan(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
-    as_of = scan_date or str(date.today())
-    today = str(date.today())
+    if scan_date:
+        as_of = scan_date
+    else:
+        as_of = await asyncio.to_thread(_latest_price_date_sync)
 
-    if as_of == today:
-        # 1. In-memory cache
-        cached = _cache_get("scan_today")
-        if cached is not None:
-            return cached
-        # 2. Persisted DB result (survives redeploys)
-        db_result = await asyncio.to_thread(_read_scan_from_db, today)
-        if db_result is not None:
-            _cache_set("scan_today", db_result)
-            return db_result
+    # 1. In-memory cache (keyed to latest date)
+    cached = _cache_get("scan_today")
+    if cached is not None and cached.get("as_of") == as_of:
+        return cached
 
-    # 3. Compute fresh (always for historical dates; fallback for today if DB empty)
+    # 2. Persisted DB result (survives redeploys)
+    db_result = await asyncio.to_thread(_read_scan_from_db, as_of)
+    if db_result is not None:
+        _cache_set("scan_today", db_result)
+        return db_result
+
+    # 3. Compute fresh
     try:
         result = await asyncio.to_thread(_compute_scan_sync, as_of)
-        if as_of == today:
-            _cache_set("scan_today", result)
-            await asyncio.to_thread(_persist_scan_to_db, result, today)
+        _cache_set("scan_today", result)
+        await asyncio.to_thread(_persist_scan_to_db, result, as_of)
         return result
     except Exception as exc:
         logger.error("api_scan failed: %s", exc)
@@ -759,22 +786,21 @@ async def api_run_all():
     # Allow DuckDB file writes to flush before the scan opens a new connection.
     await asyncio.sleep(2)
 
-    # Step 6: verify price data exists for today, then compute scan.
+    # Step 6: find latest available price date and compute scan against it.
     try:
         from scanner.db import get_connection
         conn = get_connection()
         try:
-            today_count = conn.execute(
-                "SELECT COUNT(*) FROM prices WHERE date = CURRENT_DATE"
-            ).fetchone()[0]
+            latest_row = conn.execute("SELECT MAX(date) FROM prices").fetchone()
         finally:
             conn.close()
-        if today_count == 0:
-            logger.warning("run-all: no price rows for today after ingestion — skipping scan")
+        latest_date = str(latest_row[0]) if latest_row and latest_row[0] else None
+        if not latest_date:
+            logger.warning("run-all: no price data in DB — skipping scan")
             results.append({"job": "scan", "status": "skipped-no-data"})
         else:
-            logger.info("run-all: %d price rows for today — running scan", today_count)
-            await asyncio.to_thread(_run_scan_today_sync)
+            logger.info("run-all: latest price date=%s — running scan", latest_date)
+            await asyncio.to_thread(_run_scan_today_sync, latest_date)
             results.append({"job": "scan", "status": "success"})
     except Exception as exc:
         logger.error("run-all: scan raised: %s", exc)
