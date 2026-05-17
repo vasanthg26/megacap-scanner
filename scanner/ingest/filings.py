@@ -176,12 +176,12 @@ def cleanup_filings(conn) -> dict:
 
 
 def _get_user_agent() -> str:
-    if _SETTINGS_PATH.exists():
+    import os
+    value = os.environ.get("SEC_USER_AGENT", "")
+    if not value and _SETTINGS_PATH.exists():
         with _SETTINGS_PATH.open() as f:
             settings = yaml.safe_load(f) or {}
         value = settings.get("SEC_USER_AGENT", "")
-    else:
-        value = ""
     if not value or any(p in value.lower() for p in _PLACEHOLDER_SUBSTRINGS):
         return "MegaCapScanner research@example.com"
     return value

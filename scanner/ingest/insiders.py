@@ -72,22 +72,22 @@ def _is_xsl_path(document: str) -> bool:
 
 
 def _get_user_agent() -> str:
-    if _SETTINGS_PATH.exists():
+    import os
+    value = os.environ.get("SEC_USER_AGENT", "")
+    if not value and _SETTINGS_PATH.exists():
         with _SETTINGS_PATH.open() as f:
             settings = yaml.safe_load(f) or {}
         value = settings.get("SEC_USER_AGENT", "")
-    else:
-        value = ""
     if not value or not value.strip():
         raise ValueError(
-            "SEC_USER_AGENT is not set in config/settings.yaml. "
-            "Set it to identify your application per SEC EDGAR policy. "
+            "SEC_USER_AGENT is not set. "
+            "Set it as an environment variable or in config/settings.yaml. "
             "Example: 'AppName/Version (contact: real-email@domain.com)'"
         )
     lower = value.lower()
     if any(ph in lower for ph in _PLACEHOLDER_SUBSTRINGS):
         raise ValueError(
-            f"SEC_USER_AGENT in config/settings.yaml still contains placeholder text: {value!r}. "
+            f"SEC_USER_AGENT still contains placeholder text: {value!r}. "
             "Update it with your real application name and contact email per SEC EDGAR requirements. "
             "Example: 'AppName/Version (contact: real-email@domain.com)'"
         )
