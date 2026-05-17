@@ -756,10 +756,26 @@ async def api_run_all():
             ok = False
         results.append({"job": job_name, "status": "success" if ok else "failed"})
 
-    # Step 6: compute scan and populate cache so /api/scan returns data immediately
+    # Allow DuckDB file writes to flush before the scan opens a new connection.
+    await asyncio.sleep(2)
+
+    # Step 6: verify price data exists for today, then compute scan.
     try:
-        await asyncio.to_thread(_run_scan_today_sync)
-        results.append({"job": "scan", "status": "success"})
+        from scanner.db import get_connection
+        conn = get_connection()
+        try:
+            today_count = conn.execute(
+                "SELECT COUNT(*) FROM prices WHERE date = CURRENT_DATE"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        if today_count == 0:
+            logger.warning("run-all: no price rows for today after ingestion — skipping scan")
+            results.append({"job": "scan", "status": "skipped-no-data"})
+        else:
+            logger.info("run-all: %d price rows for today — running scan", today_count)
+            await asyncio.to_thread(_run_scan_today_sync)
+            results.append({"job": "scan", "status": "success"})
     except Exception as exc:
         logger.error("run-all: scan raised: %s", exc)
         results.append({"job": "scan", "status": "failed"})
