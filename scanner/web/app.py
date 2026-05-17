@@ -1220,10 +1220,10 @@ def api_status():
 
 @app.get("/api/debug")
 def debug():
-    from scanner.db import get_connection
+    from scanner.db import get_connection, _DB_PATH
 
-    db_path = os.environ.get("DATABASE_PATH", "data/scanner.duckdb")
-    db_exists = os.path.exists(db_path)
+    actual_path = str(_DB_PATH)
+    db_exists = os.path.exists(actual_path)
     conn = get_connection()
     try:
         tables = [r[0] for r in conn.execute(
@@ -1235,8 +1235,9 @@ def debug():
     finally:
         conn.close()
     return {
-        "db_path": db_path,
+        "db_path": actual_path,
         "db_exists": db_exists,
+        "DATABASE_PATH_env": os.environ.get("DATABASE_PATH", "NOT SET"),
         "tables": tables,
         "prices_count": prices,
         "scheduler_runs_count": sched,
