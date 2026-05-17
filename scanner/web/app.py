@@ -1257,6 +1257,16 @@ def debug():
             ORDER BY computed_at DESC LIMIT 1
             """
         ).fetchone()
+        price_dates = conn.execute(
+            """
+            SELECT date, COUNT(*) AS count
+            FROM prices
+            GROUP BY date
+            ORDER BY date DESC
+            LIMIT 3
+            """
+        ).fetchall()
+        current_date = conn.execute("SELECT CURRENT_DATE").fetchone()[0]
     finally:
         conn.close()
     return {
@@ -1273,6 +1283,8 @@ def debug():
             "json_size": scan_row[2],
             "json_preview": scan_row[3],
         } if scan_row else None,
+        "price_dates": [{"date": str(r[0]), "count": r[1]} for r in price_dates],
+        "db_current_date": str(current_date),
     }
 
 
