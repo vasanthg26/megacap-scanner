@@ -494,22 +494,6 @@ def _compute_journal_sync() -> dict:
 
 def _warm_caches_sync() -> None:
     logger.info("Pre-warming caches at startup...")
-    scan_date = str(date.today())
-    try:
-        _cache_set("rotation", _compute_rotation_sync())
-        logger.info("  rotation cache warm")
-    except Exception as exc:
-        logger.error("rotation cache warm failed: %s", exc)
-    try:
-        _cache_set("megacap", _compute_scan_megacap_sync())
-        logger.info("  megacap cache warm")
-    except Exception as exc:
-        logger.error("megacap cache warm failed: %s", exc)
-    try:
-        _cache_set(f"scan:{scan_date}", _compute_scan_sync(scan_date))
-        logger.info("  scan cache warm")
-    except Exception as exc:
-        logger.error("scan cache warm failed: %s", exc)
     try:
         _cache_set("journal", _compute_journal_sync())
         logger.info("  journal cache warm")
@@ -556,45 +540,29 @@ def root():
 @app.get("/api/scan")
 async def api_scan(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
     as_of = scan_date or str(date.today())
-    cache_key = f"scan:{as_of}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
     try:
-        result = await asyncio.to_thread(_compute_scan_sync, as_of)
+        return await asyncio.to_thread(_compute_scan_sync, as_of)
     except Exception as exc:
         logger.error("api_scan failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
-    _cache_set(cache_key, result)
-    return result
 
 
 @app.get("/api/scan-megacap")
 async def api_scan_megacap():
-    cached = _cache_get("megacap")
-    if cached is not None:
-        return cached
     try:
-        result = await asyncio.to_thread(_compute_scan_megacap_sync)
+        return await asyncio.to_thread(_compute_scan_megacap_sync)
     except Exception as exc:
         logger.error("api_scan_megacap failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
-    _cache_set("megacap", result)
-    return result
 
 
 @app.get("/api/rotation")
 async def api_rotation():
-    cached = _cache_get("rotation")
-    if cached is not None:
-        return cached
     try:
-        result = await asyncio.to_thread(_compute_rotation_sync)
+        return await asyncio.to_thread(_compute_rotation_sync)
     except Exception as exc:
         logger.error("api_rotation failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
-    _cache_set("rotation", result)
-    return result
 
 
 @app.get("/api/journal")
