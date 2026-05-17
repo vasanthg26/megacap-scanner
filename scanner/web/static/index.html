@@ -278,6 +278,15 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .run-btn:disabled { opacity: 0.5; cursor: default; }
 .run-ok   { color: var(--green); }
 .run-fail { color: var(--red); }
+#refresh-all-btn { background: var(--blue); border: none; color: #fff; cursor: pointer; font-size: 12px; font-family: 'IBM Plex Mono', monospace; padding: 6px 14px; border-radius: 4px; margin-bottom: 14px; display: inline-flex; align-items: center; gap: 6px; }
+#refresh-all-btn:hover { opacity: 0.85; }
+#refresh-all-btn:disabled { opacity: 0.5; cursor: default; }
+#refresh-all-topbar-btn { background: none; border: 1px solid var(--border); color: var(--fg); cursor: pointer; font-size: 14px; padding: 2px 7px; border-radius: 3px; line-height: 1.4; }
+#refresh-all-topbar-btn:hover { background: var(--dim); }
+#refresh-all-topbar-btn:disabled { opacity: 0.5; cursor: default; }
+#refresh-all-toast { position: fixed; bottom: 24px; right: 24px; z-index: 9999; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 16px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; display: none; max-width: 320px; }
+#refresh-all-toast.toast-ok   { border-color: var(--green); color: var(--green); }
+#refresh-all-toast.toast-fail { border-color: var(--yellow); color: var(--yellow); }
 
 /* ── Activity Log ────────────────────── */
 .activity-log { margin-top: 20px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
@@ -527,6 +536,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
   <div id="breadcrumb">Mega-Cap Scanner <span class="bc-sep">›</span><span class="bc-active" id="bc-view">Scanner</span></div>
   <div id="topbar-right">
     <div id="correction-badge">● CORRECTION ACTIVE</div>
+    <button id="refresh-all-topbar-btn" title="Refresh All Data">🔄</button>
     <button id="capture-btn">📷 Capture snapshot</button>
     <span id="topbar-ts"></span>
   </div>
@@ -592,6 +602,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     <div class="page" id="page-scheduler">
       <div class="page-title">Scheduler</div>
       <div class="page-sub">Automated data ingestion jobs</div>
+      <button id="refresh-all-btn">🔄 Refresh All</button>
       <table class="sched-table">
         <thead><tr><th>Job</th><th>Next Run</th><th>Last Run</th><th>Status</th><th></th></tr></thead>
         <tbody id="sched-tbody"><tr><td colspan="5" style="color:var(--dim);padding:12px 14px;">Loading&hellip;</td></tr></tbody>
@@ -715,6 +726,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     </div>
   </div>
 </div><!-- /main-content -->
+<div id="refresh-all-toast"></div>
 
 <!-- Tooltip -->
 <div class="ticker-tooltip" id="ticker-tooltip">
@@ -1821,6 +1833,99 @@ async function refreshAll(){
   document.getElementById('topbar-ts').textContent=ts;
 }
 document.getElementById('refresh-btn').addEventListener('click',refreshAll);
+
+/* ── Refresh All Jobs ─────────────────── */
+var _refreshAllRunning=false;
+var _REFRESH_ALL_SEQUENCE=['ingest','ingest-estimates','ingest-earnings','ingest-filings','ingest-insiders'];
+
+async function runRefreshAll(){
+  if(_refreshAllRunning)return;
+  _refreshAllRunning=true;
+  var mainBtn=document.getElementById('refresh-all-btn');
+  var topbarBtn=document.getElementById('refresh-all-topbar-btn');
+  var toast=document.getElementById('refresh-all-toast');
+  mainBtn.disabled=true;
+  topbarBtn.disabled=true;
+  toast.style.display='none';
+  toast.className='';
+
+  var completed=0,failed=0;
+  var total=_REFRESH_ALL_SEQUENCE.length;
+
+  // mark all job rows as pending
+  var tbody=document.getElementById('sched-tbody');
+  _REFRESH_ALL_SEQUENCE.forEach(function(jobName){
+    var rows=tbody?tbody.querySelectorAll('tr'):[];
+    rows.forEach(function(tr){
+      var cells=tr.querySelectorAll('td');
+      if(cells.length&&cells[0].textContent.trim()===jobName){
+        var lastTd=cells[cells.length-1];
+        var existing=lastTd.querySelector('.run-btn');
+        if(existing){existing.style.display='none';}
+        if(!lastTd.querySelector('.run-all-status')){
+          var sp=document.createElement('span');
+          sp.className='run-all-status';
+          sp.style.fontSize='11px';
+          sp.style.fontFamily="'IBM Plex Mono',monospace";
+          lastTd.appendChild(sp);
+        }
+        var st=lastTd.querySelector('.run-all-status');
+        st.textContent='…';
+        st.style.color='var(--dim)';
+      }
+    });
+  });
+
+  for(var i=0;i<_REFRESH_ALL_SEQUENCE.length;i++){
+    var jobName=_REFRESH_ALL_SEQUENCE[i];
+    mainBtn.textContent='🔄 Running… ('+(i+1)+'/'+total+')';
+    var ep=_JOB_ENDPOINTS[jobName];
+    var ok=false;
+    try{
+      var resp=await fetch(ep,{method:'POST'});
+      var data=await resp.json();
+      ok=data.status==='success';
+    }catch(err){
+      console.error('refresh-all: '+jobName+' error:',err);
+    }
+    if(ok){completed++;}else{failed++;}
+
+    // update row status indicator
+    var rows2=tbody?tbody.querySelectorAll('tr'):[];
+    rows2.forEach(function(tr){
+      var cells=tr.querySelectorAll('td');
+      if(cells.length&&cells[0].textContent.trim()===jobName){
+        var st=tr.querySelector('.run-all-status');
+        if(st){st.textContent=ok?'✓':'✗';st.style.color=ok?'var(--green)':'var(--red)';}
+      }
+    });
+  }
+
+  // restore run-now buttons, remove status spans
+  var allRows=tbody?tbody.querySelectorAll('tr'):[];
+  allRows.forEach(function(tr){
+    var btn=tr.querySelector('.run-btn');
+    if(btn)btn.style.display='';
+    var st=tr.querySelector('.run-all-status');
+    if(st)st.remove();
+  });
+
+  mainBtn.disabled=false;
+  topbarBtn.disabled=false;
+  mainBtn.textContent='🔄 Refresh All';
+  _refreshAllRunning=false;
+
+  toast.className=failed>0?'toast-fail':'toast-ok';
+  toast.textContent=failed>0?'Completed with errors ('+failed+' failed, '+completed+' succeeded)':'All '+total+' jobs completed successfully';
+  toast.style.display='block';
+  setTimeout(function(){toast.style.display='none';toast.className='';},5000);
+
+  // reload activity log and scheduler status
+  await Promise.allSettled([loadActivityLog(),loadScheduler()]);
+}
+
+document.getElementById('refresh-all-btn').addEventListener('click',runRefreshAll);
+document.getElementById('refresh-all-topbar-btn').addEventListener('click',runRefreshAll);
 
 refreshAll();
 setInterval(refreshAll,5*60*1000);

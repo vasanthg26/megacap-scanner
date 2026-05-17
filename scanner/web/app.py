@@ -633,6 +633,32 @@ async def api_run_cleanup_filings():
     return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
 
 
+@app.post("/api/run/all")
+async def api_run_all():
+    from scanner.web.scheduler import (
+        _job_ingest, _job_estimates, _job_earnings, _job_filings, _job_insiders,
+        scheduler_status,
+    )
+    SEQUENCE = [
+        ("ingest",           _job_ingest,    "last_ingest_ok"),
+        ("ingest-estimates", _job_estimates, "last_estimates_ok"),
+        ("ingest-earnings",  _job_earnings,  "last_earnings_ok"),
+        ("ingest-filings",   _job_filings,   "last_filings_ok"),
+        ("ingest-insiders",  _job_insiders,  "last_insiders_ok"),
+    ]
+    results = []
+    for job_name, job_fn, ok_key in SEQUENCE:
+        try:
+            await asyncio.to_thread(job_fn)
+            ok = scheduler_status.get(ok_key, False)
+        except Exception as exc:
+            logger.error("run-all: %s raised: %s", job_name, exc)
+            ok = False
+        results.append({"job": job_name, "status": "success" if ok else "failed"})
+    any_failed = any(r["status"] != "success" for r in results)
+    return {"status": "partial" if any_failed else "complete", "results": results}
+
+
 def _compute_fwd_returns(entries: list[dict], conn) -> dict[tuple, dict]:
     from collections import defaultdict
     by_date: dict[str, list[dict]] = defaultdict(list)
