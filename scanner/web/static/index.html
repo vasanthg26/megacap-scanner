@@ -604,9 +604,18 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
       <div class="page-sub">Automated data ingestion jobs</div>
       <button id="refresh-all-btn">🔄 Refresh All</button>
       <table class="sched-table">
-        <thead><tr><th>Job</th><th>Next Run</th><th>Last Run</th><th>Status</th><th></th></tr></thead>
-        <tbody id="sched-tbody"><tr><td colspan="5" style="color:var(--dim);padding:12px 14px;">Loading&hellip;</td></tr></tbody>
+        <thead><tr><th>Job</th><th>Next Run</th><th>Last Run</th><th>Status</th></tr></thead>
+        <tbody id="sched-tbody"><tr><td colspan="4" style="color:var(--dim);padding:12px 14px;">Loading&hellip;</td></tr></tbody>
       </table>
+      <div id="advanced-toggle-row" style="margin-top:10px;margin-bottom:4px;">
+        <button id="advanced-toggle" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;font-family:'IBM Plex Mono',monospace;padding:0;">Advanced ▼</button>
+      </div>
+      <div id="advanced-section" style="display:none;border:1px solid var(--border);border-radius:4px;overflow:hidden;margin-bottom:16px;">
+        <table class="sched-table" style="margin:0;">
+          <thead><tr><th>Job</th><th></th></tr></thead>
+          <tbody id="advanced-tbody"></tbody>
+        </table>
+      </div>
       <div class="activity-log">
         <div class="activity-log-header">
           <span>Activity Log</span>
@@ -913,7 +922,7 @@ async function loadScheduler(){
   try{var r=await fetch('/api/status');if(!r.ok)throw new Error(r.statusText);cachedStatus=await r.json();renderScheduler(cachedStatus);
     var lu=cachedStatus.last_updated;
     if(lu){var ts=fmtDate(lu);document.getElementById('sb-last-updated').textContent='Updated '+ts;document.getElementById('topbar-ts').textContent=ts;}
-  }catch(err){console.error('sched:',err);document.getElementById('sched-tbody').innerHTML='<tr><td colspan="5" style="color:var(--red);padding:12px 14px;">Failed to load</td></tr>';}
+  }catch(err){console.error('sched:',err);document.getElementById('sched-tbody').innerHTML='<tr><td colspan="4" style="color:var(--red);padding:12px 14px;">Failed to load</td></tr>';}
   loadActivityLog();
 }
 
@@ -953,24 +962,43 @@ function renderActivityLog(entries){
 var _JOB_ENDPOINTS={'ingest':'/api/run/ingest','ingest-estimates':'/api/run/ingest-estimates','ingest-insiders':'/api/run/ingest-insiders','ingest-earnings':'/api/run/ingest-earnings','ingest-filings':'/api/run/ingest-filings','cleanup-filings':'/api/run/cleanup-filings'};
 function renderScheduler(data){
   var tbody=document.getElementById('sched-tbody'),jobs=data.jobs||data;
-  if(!Array.isArray(jobs)||!jobs.length){tbody.innerHTML='<tr><td colspan="5" style="color:var(--dim);padding:12px 14px;">No jobs configured</td></tr>';return;}
+  if(!Array.isArray(jobs)||!jobs.length){tbody.innerHTML='<tr><td colspan="4" style="color:var(--dim);padding:12px 14px;">No jobs configured</td></tr>';return;}
+  // main table — status only, no run buttons
   tbody.innerHTML=jobs.map(function(j){
     var name=j.name||j.id||'—',nr=j.next_run_time||'—',lr=j.last_run_time||'—';
-    var ep=_JOB_ENDPOINTS[name];
-    var btn=ep?'<button class="run-btn" data-ep="'+ep+'">Run now</button>':'';
-    return'<tr><td style="text-align:left">'+name+'</td><td>'+nr+'</td><td>'+lr+'</td><td style="text-align:left">'+dotHtml(j.last_run_status)+'</td><td>'+btn+'</td></tr>';
+    return'<tr><td style="text-align:left">'+name+'</td><td>'+nr+'</td><td>'+lr+'</td><td style="text-align:left">'+dotHtml(j.last_run_status)+'</td></tr>';
   }).join('');
-  tbody.querySelectorAll('.run-btn').forEach(function(btn){
-    btn.addEventListener('click',async function(){
-      btn.disabled=true;btn.textContent='…';
-      try{var r=await fetch(btn.dataset.ep,{method:'POST'});var d=await r.json();
-        if(d.status==='success'){btn.textContent='✓';btn.classList.add('run-ok');}
-        else{btn.textContent='✗';btn.classList.add('run-fail');console.error('run job failed:',d);}
-      }catch(err){btn.textContent='✗';btn.classList.add('run-fail');console.error('run job error:',err);}
-      setTimeout(function(){btn.disabled=false;btn.textContent='Run now';btn.classList.remove('run-ok','run-fail');},3000);
+  // advanced table — run buttons only
+  var adv=document.getElementById('advanced-tbody');
+  if(adv){
+    adv.innerHTML=jobs.map(function(j){
+      var name=j.name||j.id||'—',ep=_JOB_ENDPOINTS[name];
+      var btn=ep?'<button class="run-btn" data-ep="'+ep+'">Run now</button>':'—';
+      return'<tr><td style="text-align:left">'+name+'</td><td>'+btn+'</td></tr>';
+    }).join('');
+    adv.querySelectorAll('.run-btn').forEach(function(btn){
+      btn.addEventListener('click',async function(){
+        btn.disabled=true;btn.textContent='…';
+        try{var r=await fetch(btn.dataset.ep,{method:'POST'});var d=await r.json();
+          if(d.status==='success'){btn.textContent='✓';btn.classList.add('run-ok');}
+          else{btn.textContent='✗';btn.classList.add('run-fail');console.error('run job failed:',d);}
+        }catch(err){btn.textContent='✗';btn.classList.add('run-fail');console.error('run job error:',err);}
+        setTimeout(function(){btn.disabled=false;btn.textContent='Run now';btn.classList.remove('run-ok','run-fail');},3000);
+      });
     });
-  });
+  }
 }
+
+(function(){
+  var toggle=document.getElementById('advanced-toggle');
+  var section=document.getElementById('advanced-section');
+  if(!toggle||!section)return;
+  toggle.addEventListener('click',function(){
+    var open=section.style.display!=='none';
+    section.style.display=open?'none':'block';
+    toggle.textContent=open?'Advanced ▼':'Advanced ▲';
+  });
+}());
 
 /* ── Mega-Cap ─────────────────────────── */
 async function loadMegacap(){
@@ -1852,10 +1880,10 @@ async function runRefreshAll(){
   var completed=0,failed=0;
   var total=_REFRESH_ALL_SEQUENCE.length;
 
-  // mark all job rows as pending
-  var tbody=document.getElementById('sched-tbody');
+  // mark advanced rows as pending (run-btn column)
+  var advTbody=document.getElementById('advanced-tbody');
   _REFRESH_ALL_SEQUENCE.forEach(function(jobName){
-    var rows=tbody?tbody.querySelectorAll('tr'):[];
+    var rows=advTbody?advTbody.querySelectorAll('tr'):[];
     rows.forEach(function(tr){
       var cells=tr.querySelectorAll('td');
       if(cells.length&&cells[0].textContent.trim()===jobName){
@@ -1891,7 +1919,7 @@ async function runRefreshAll(){
     if(ok){completed++;}else{failed++;}
 
     // update row status indicator
-    var rows2=tbody?tbody.querySelectorAll('tr'):[];
+    var rows2=advTbody?advTbody.querySelectorAll('tr'):[];
     rows2.forEach(function(tr){
       var cells=tr.querySelectorAll('td');
       if(cells.length&&cells[0].textContent.trim()===jobName){
@@ -1902,7 +1930,7 @@ async function runRefreshAll(){
   }
 
   // restore run-now buttons, remove status spans
-  var allRows=tbody?tbody.querySelectorAll('tr'):[];
+  var allRows=advTbody?advTbody.querySelectorAll('tr'):[];
   allRows.forEach(function(tr){
     var btn=tr.querySelector('.run-btn');
     if(btn)btn.style.display='';
