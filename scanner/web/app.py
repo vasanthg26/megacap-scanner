@@ -1,0 +1,1573 @@
+"""FastAPI web application — read-only dashboard over scanner data."""
+
+import asyncio
+import logging
+import math
+from contextlib import asynccontextmanager
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# In-memory cache — keys are endpoint names, values are (payload, fetched_at)
+# ---------------------------------------------------------------------------
+_cache: dict[str, tuple[Any, datetime]] = {}
+_CACHE_TTL_SECONDS = 600  # 10 minutes
+
+
+def _cache_get(key: str) -> Any | None:
+    entry = _cache.get(key)
+    if entry is None:
+        return None
+    payload, fetched_at = entry
+    if (datetime.utcnow() - fetched_at).total_seconds() > _CACHE_TTL_SECONDS:
+        return None
+    return payload
+
+
+def _cache_set(key: str, payload: Any) -> None:
+    _cache[key] = (payload, datetime.utcnow())
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared across endpoints
+# ---------------------------------------------------------------------------
+
+def _nan_to_none(v: float) -> float | None:
+    return None if math.isnan(v) else v
+
+
+def _rolling_return_pct(ticker: str, lookback: int, as_of: str, conn) -> float:
+    rows = conn.execute(
+        """
+        SELECT adj_close
+        FROM prices
+        WHERE ticker = ? AND date <= ?
+        ORDER BY date DESC
+        LIMIT ?
+        """,
+        [ticker, as_of, lookback + 1],
+    ).fetchall()
+    if len(rows) < lookback + 1:
+        return float("nan")
+    latest, oldest = rows[0][0], rows[-1][0]
+    if oldest == 0:
+        return float("nan")
+    return (latest - oldest) / oldest
+
+
+def _batch_rvol(tickers: list[str], as_of: str, conn) -> dict[str, float]:
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, volume, rn
+        FROM (
+            SELECT ticker, volume,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 21
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, vol, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(vol) if vol is not None else 0.0))
+    result: dict[str, float] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        vols = [v for _, v in series]
+        if len(vols) < 2:
+            result[tkr] = float("nan")
+            continue
+        today_vol = vols[0]
+        avg_vol = sum(vols[1:]) / len(vols[1:])
+        result[tkr] = today_vol / avg_vol if avg_vol > 0 else float("nan")
+    return result
+
+
+def _batch_above_50ma(tickers: list[str], as_of: str, conn) -> dict[str, bool]:
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn
+        FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 51
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, close, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(close)))
+    result: dict[str, bool] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        closes = [c for _, c in series]
+        if len(closes) < 51:
+            result[tkr] = False
+            continue
+        latest = closes[0]
+        ma50 = sum(closes[1:51]) / 50
+        result[tkr] = latest > ma50
+    return result
+
+
+def _insider_category(summary: dict) -> str:
+    if not summary:
+        return "none"
+    buys = summary.get("buy_count", 0)
+    has_cluster = summary.get("has_cluster_buy", False)
+    has_officer = summary.get("has_officer_buys", False)
+    has_selling = summary.get("has_notable_selling", False)
+    if buys == 0 and has_selling:
+        return "selling"
+    if buys == 0:
+        return "none"
+    if has_cluster:
+        return "cluster"
+    if has_officer:
+        return "officer"
+    return "single"
+
+
+def _is_market_open() -> bool:
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if now.weekday() >= 5:
+        return False
+    mins = now.hour * 60 + now.minute
+    return 9 * 60 + 30 <= mins < 16 * 60
+
+
+def _fetch_current_prices(tickers: list[str]) -> dict[str, float]:
+    import yfinance as yf
+
+    use_live = _is_market_open()
+    prices: dict[str, float] = {}
+    for ticker in tickers:
+        try:
+            fi = yf.Ticker(ticker).fast_info
+            live = getattr(fi, "last_price", None)
+            prev = getattr(fi, "previous_close", None)
+            price = (live or prev) if use_live else (prev or live)
+            if price and float(price) > 0:
+                prices[ticker] = float(price)
+        except Exception as exc:
+            logger.warning("price fetch failed for %s: %s", ticker, exc)
+    return prices
+
+
+# ---------------------------------------------------------------------------
+# Sync compute functions (run in threadpool via asyncio.to_thread)
+# ---------------------------------------------------------------------------
+
+def _compute_scan_sync(scan_date: str) -> dict:
+    from scanner.db import get_connection
+    from scanner.graph.loader import MEGA_CAPS, get_dependents
+    from scanner.signals.relative_strength import RelativeStrengthVsParent
+    from scanner.enrichment.insiders import get_insider_summary
+    from scanner.signals.base import (
+        classify_action, score_rank, classify_regime,
+        TRADEABLE_REGIMES, VALIDATED_PARENTS,
+    )
+    from scanner.signals.confirmation import compute_confirmation_dependent
+
+    conn = get_connection()
+    try:
+        insider_count = conn.execute("SELECT COUNT(*) FROM insider_transactions").fetchone()[0]
+        estimates_count = conn.execute("SELECT COUNT(*) FROM estimates").fetchone()[0]
+        show_insiders = insider_count > 0
+        show_estimates = estimates_count > 0
+
+        parent_regimes: dict[str, str] = {}
+        parent_returns: dict[str, float] = {}
+        for mc in MEGA_CAPS:
+            ret_20d = _rolling_return_pct(mc, 20, scan_date, conn)
+            parent_regimes[mc] = classify_regime(ret_20d)
+            parent_returns[mc] = ret_20d
+
+        per_parent: dict[str, list[tuple[str, float]]] = {}
+        for parent in MEGA_CAPS:
+            edges = get_dependents(parent)
+            if not edges:
+                continue
+            signal = RelativeStrengthVsParent(parent=parent, lookback=20)
+            seen: dict[str, float] = {}
+            for edge in edges:
+                if edge.child in seen:
+                    continue
+                s = signal.compute(edge.child, scan_date, conn)
+                if not math.isnan(s):
+                    seen[edge.child] = s
+            per_parent[parent] = sorted(seen.items(), key=lambda x: x[1], reverse=True)
+
+        universe_scores = [s for rows in per_parent.values() for _, s in rows]
+        all_tickers = list({t for scored in per_parent.values() for t, _ in scored})
+
+        est_scores: dict[str, float | None] = {}
+        if show_estimates:
+            for t in all_tickers:
+                row = conn.execute(
+                    "SELECT revision_score FROM estimates WHERE ticker = ? ORDER BY date DESC LIMIT 1",
+                    [t],
+                ).fetchone()
+                est_scores[t] = row[0] if row else None
+
+        rvol_scores = _batch_rvol(all_tickers, scan_date, conn)
+        above_50ma_flags = _batch_above_50ma(all_tickers, scan_date, conn)
+
+        insider_summaries: dict[str, dict] = {}
+        if show_insiders:
+            as_of_date = date.fromisoformat(scan_date)
+            for t in all_tickers:
+                insider_summaries[t] = get_insider_summary(t, as_of_date, conn)
+
+        earnings_next_dates: dict[str, object] = {}
+        try:
+            ec = conn.execute("SELECT COUNT(*) FROM earnings_dates").fetchone()[0]
+            if ec > 0:
+                placeholders = ", ".join(["?" for _ in all_tickers])
+                for tkr, nd in conn.execute(
+                    f"SELECT ticker, next_earnings_date FROM earnings_dates WHERE ticker IN ({placeholders})",
+                    all_tickers,
+                ).fetchall():
+                    earnings_next_dates[tkr] = nd
+        except Exception as exc:
+            logger.warning("earnings date batch load failed: %s", exc)
+
+        ticker_prices = _fetch_current_prices(all_tickers)
+
+        scan_as_of_date = date.fromisoformat(scan_date)
+
+        def _earnings_days(ticker: str) -> int | None:
+            nd = earnings_next_dates.get(ticker)
+            if nd is None:
+                return None
+            nd_date = nd.date() if hasattr(nd, "date") else nd
+            delta = (nd_date - scan_as_of_date).days
+            return delta if delta >= 0 else None
+
+        groups = []
+        for parent in MEGA_CAPS:
+            scored = per_parent.get(parent)
+            if not scored:
+                continue
+            regime = parent_regimes.get(parent, "UNKNOWN")
+            ret_20d = parent_returns.get(parent, float("nan"))
+            is_tradeable = regime in TRADEABLE_REGIMES
+            is_validated = parent in VALIDATED_PARENTS
+
+            rows_out = []
+            shown: set[str] = set()
+            top3 = scored[:3]
+            bot3 = [(t, s) for t, s in scored[-3:] if t not in {tt for tt, _ in top3}]
+
+            for section, items in [("top", top3), ("bottom", bot3)]:
+                for ticker, s in items:
+                    shown.add(ticker)
+                    action = classify_action(s, universe_scores)
+                    rank, total = score_rank(s, universe_scores)
+
+                    if not is_validated:
+                        action_label = "WAIT - unvalidated"
+                    elif is_tradeable:
+                        action_label = str(action)
+                    else:
+                        action_label = "WAIT"
+
+                    rvol_val = rvol_scores.get(ticker, float("nan"))
+                    rev_score_val = est_scores.get(ticker) if show_estimates else None
+                    ins = insider_summaries.get(ticker, {}) if show_insiders else {}
+                    insider_buying = ins.get("buy_count", 0) > 0
+                    above_50ma = above_50ma_flags.get(ticker, False)
+
+                    confirm = compute_confirmation_dependent(
+                        rs_score=s,
+                        rvol=rvol_val,
+                        rev_score=rev_score_val,
+                        insider_buying=insider_buying,
+                        above_50ma=above_50ma,
+                    )
+
+                    rows_out.append({
+                        "ticker": ticker,
+                        "parent": parent,
+                        "price": ticker_prices.get(ticker),
+                        "rs_score": _nan_to_none(s),
+                        "rank": rank,
+                        "total": total,
+                        "action_label": action_label,
+                        "est_rev": rev_score_val,
+                        "rvol": _nan_to_none(rvol_val),
+                        "confirm": confirm,
+                        "confirm_max": 5,
+                        "insider_annotation": _insider_category(ins),
+                        "above_50ma": above_50ma,
+                        "section": section,
+                        "earnings_days": _earnings_days(ticker),
+                    })
+
+            groups.append({
+                "parent": parent,
+                "parent_regime": regime,
+                "parent_20d_return": _nan_to_none(ret_20d),
+                "is_tradeable": is_tradeable,
+                "is_validated": is_validated,
+                "rows": rows_out,
+            })
+
+        return {
+            "as_of": scan_date,
+            "show_insiders": show_insiders,
+            "show_estimates": show_estimates,
+            "groups": groups,
+        }
+    finally:
+        conn.close()
+
+
+def _compute_scan_megacap_sync() -> dict:
+    from scanner.db import get_connection
+    from scanner.enrichment.insiders import get_insider_summary
+    from scanner.signals.confirmation import compute_confirmation_megacap
+    from scanner.signals.megacap import compute_megacap_scores, fetch_headlines
+
+    results = compute_megacap_scores()
+    as_of_date = date.today()
+    as_of_str = str(as_of_date)
+
+    conn = get_connection()
+    try:
+        insider_count = conn.execute("SELECT COUNT(*) FROM insider_transactions").fetchone()[0]
+        has_insiders = insider_count > 0
+
+        revision_scores: dict[str, float | None] = {}
+        insider_summaries: dict[str, dict] = {}
+        for r in results:
+            row = conn.execute(
+                "SELECT revision_score FROM estimates WHERE ticker = ? ORDER BY date DESC LIMIT 1",
+                [r.ticker],
+            ).fetchone()
+            revision_scores[r.ticker] = row[0] if row else None
+            if has_insiders:
+                insider_summaries[r.ticker] = get_insider_summary(r.ticker, as_of_date, conn)
+
+        earnings_next_dates_mc: dict[str, object] = {}
+        try:
+            ec = conn.execute("SELECT COUNT(*) FROM earnings_dates").fetchone()[0]
+            if ec > 0:
+                mc_tickers = [r.ticker for r in results]
+                placeholders = ", ".join(["?" for _ in mc_tickers])
+                for tkr, nd in conn.execute(
+                    f"SELECT ticker, next_earnings_date FROM earnings_dates WHERE ticker IN ({placeholders})",
+                    mc_tickers,
+                ).fetchall():
+                    earnings_next_dates_mc[tkr] = nd
+        except Exception as exc:
+            logger.warning("megacap earnings date batch load failed: %s", exc)
+    finally:
+        conn.close()
+
+    def _mc_earnings_days(ticker: str) -> int | None:
+        nd = earnings_next_dates_mc.get(ticker)
+        if nd is None:
+            return None
+        nd_date = nd.date() if hasattr(nd, "date") else nd
+        delta = (nd_date - as_of_date).days
+        return delta if delta >= 0 else None
+
+    rows = []
+    for r in results:
+        rev_score = revision_scores.get(r.ticker)
+        ins = insider_summaries.get(r.ticker, {})
+        insider_buying = ins.get("buy_count", 0) > 0
+        confirm = compute_confirmation_megacap(
+            rs_20=r.rs_20,
+            rvol=r.rvol,
+            rev_score=rev_score,
+            insider_buying=insider_buying,
+            trend_raw=r.trend_raw,
+        )
+        headlines = fetch_headlines(r.ticker, max_headlines=3)
+        rows.append({
+            "rank": r.rank,
+            "ticker": r.ticker,
+            "price": _nan_to_none(r.price),
+            "rs_20": _nan_to_none(r.rs_20),
+            "rs_60": _nan_to_none(r.rs_60),
+            "rs_120": _nan_to_none(r.rs_120),
+            "trend_raw": r.trend_raw,
+            "trend": _nan_to_none(r.trend),
+            "vol_conviction": _nan_to_none(r.vol_conviction),
+            "hist_pct": _nan_to_none(r.hist_pct),
+            "rvol": _nan_to_none(r.rvol),
+            "est_rev": rev_score,
+            "confirm": confirm,
+            "confirm_max": 5,
+            "score": _nan_to_none(r.composite),
+            "label": r.label,
+            "insider_annotation": _insider_category(ins),
+            "headlines": headlines,
+            "earnings_days": _mc_earnings_days(r.ticker),
+        })
+
+    return {"as_of": as_of_str, "rankings": rows}
+
+
+def _compute_rotation_sync() -> dict:
+    from scanner.db import get_connection
+    from scanner.signals.rotation import compute_rotation, fetch_vix
+
+    as_of = str(date.today())
+    conn = get_connection()
+    try:
+        rot = compute_rotation(as_of, conn)
+    finally:
+        conn.close()
+
+    return {
+        "as_of": as_of,
+        "xlk_rank": rot.xlk_rank,
+        "xlk_status": rot.xlk_status,
+        "xlk_20d": _nan_to_none(rot.xlk_20d),
+        "xlk_60d": _nan_to_none(rot.xlk_60d),
+        "spy_20d": _nan_to_none(rot.spy_20d),
+        "xlk_vs_spy": _nan_to_none(rot.xlk_vs_spy),
+        "data_available": rot.data_available,
+        "vix_level": _nan_to_none(rot.vix_level),
+        "vix_label": rot.vix_label,
+    }
+
+
+def _compute_journal_sync() -> dict:
+    from scanner.db import get_connection
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT scan_date, ticker, parent, parent_regime, price, rs_score,
+                   rank, action_label, est_rev, rvol, confirm, insider_annotation,
+                   earnings_days, parent_20d_return, notes
+            FROM journal
+            ORDER BY scan_date DESC, parent, ticker
+            LIMIT 200
+            """
+        ).fetchall()
+    except Exception as exc:
+        logger.error("journal fetch failed: %s", exc)
+        return {"entries": []}
+    finally:
+        conn.close()
+
+    cols = [
+        "scan_date", "ticker", "parent", "parent_regime", "price", "rs_score",
+        "rank", "action_label", "est_rev", "rvol", "confirm", "insider_annotation",
+        "earnings_days", "parent_20d_return", "notes",
+    ]
+    entries = []
+    for r in rows:
+        e = dict(zip(cols, r))
+        if e["scan_date"] is not None:
+            e["scan_date"] = str(e["scan_date"])
+        entries.append(e)
+    return {"entries": entries}
+
+
+def _warm_caches_sync() -> None:
+    logger.info("Pre-warming caches at startup...")
+    scan_date = str(date.today())
+    try:
+        _cache_set("rotation", _compute_rotation_sync())
+        logger.info("  rotation cache warm")
+    except Exception as exc:
+        logger.error("rotation cache warm failed: %s", exc)
+    try:
+        _cache_set("megacap", _compute_scan_megacap_sync())
+        logger.info("  megacap cache warm")
+    except Exception as exc:
+        logger.error("megacap cache warm failed: %s", exc)
+    try:
+        _cache_set(f"scan:{scan_date}", _compute_scan_sync(scan_date))
+        logger.info("  scan cache warm")
+    except Exception as exc:
+        logger.error("scan cache warm failed: %s", exc)
+    try:
+        _cache_set("journal", _compute_journal_sync())
+        logger.info("  journal cache warm")
+    except Exception as exc:
+        logger.error("journal cache warm failed: %s", exc)
+    logger.info("Cache pre-warm complete")
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from scanner.web.scheduler import create_scheduler, set_scheduler
+
+    scheduler = create_scheduler()
+    set_scheduler(scheduler)
+    scheduler.start()
+    logger.info("APScheduler started")
+
+    # Pre-warm caches in background so startup doesn't block
+    asyncio.create_task(asyncio.to_thread(_warm_caches_sync))
+
+    yield
+
+    scheduler.shutdown(wait=False)
+    set_scheduler(None)
+    logger.info("APScheduler stopped")
+
+
+_STATIC_DIR = Path(__file__).parent / "static"
+_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+app = FastAPI(title="Mega-Cap Scanner", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+@app.get("/")
+def root():
+    return FileResponse(str(_STATIC_DIR / "index.html"))
+
+
+@app.get("/api/scan")
+async def api_scan(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
+    as_of = scan_date or str(date.today())
+    cache_key = f"scan:{as_of}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_scan_sync, as_of)
+    except Exception as exc:
+        logger.error("api_scan failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    _cache_set(cache_key, result)
+    return result
+
+
+@app.get("/api/scan-megacap")
+async def api_scan_megacap():
+    cached = _cache_get("megacap")
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_scan_megacap_sync)
+    except Exception as exc:
+        logger.error("api_scan_megacap failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    _cache_set("megacap", result)
+    return result
+
+
+@app.get("/api/rotation")
+async def api_rotation():
+    cached = _cache_get("rotation")
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_rotation_sync)
+    except Exception as exc:
+        logger.error("api_rotation failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    _cache_set("rotation", result)
+    return result
+
+
+@app.get("/api/journal")
+async def api_journal():
+    cached = _cache_get("journal")
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_journal_sync)
+    except Exception as exc:
+        logger.error("api_journal failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    _cache_set("journal", result)
+    return result
+
+
+@app.post("/api/run/ingest")
+async def api_run_ingest():
+    from scanner.web.scheduler import _job_ingest, scheduler_status
+    await asyncio.to_thread(_job_ingest)
+    if scheduler_status.get("last_ingest_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Ingest completed with errors — check server logs"}
+
+
+@app.post("/api/run/ingest-estimates")
+async def api_run_ingest_estimates():
+    from scanner.web.scheduler import _job_estimates, scheduler_status
+    await asyncio.to_thread(_job_estimates)
+    if scheduler_status.get("last_estimates_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Estimates ingest completed with errors — check server logs"}
+
+
+@app.post("/api/run/ingest-insiders")
+async def api_run_ingest_insiders():
+    from scanner.web.scheduler import _job_insiders, scheduler_status
+    await asyncio.to_thread(_job_insiders)
+    if scheduler_status.get("last_insiders_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Insider ingest completed with errors — check server logs"}
+
+
+@app.post("/api/run/ingest-earnings")
+async def api_run_ingest_earnings():
+    from scanner.web.scheduler import _job_earnings, scheduler_status
+    await asyncio.to_thread(_job_earnings)
+    if scheduler_status.get("last_earnings_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Earnings ingest completed with errors — check server logs"}
+
+
+@app.post("/api/run/ingest-filings")
+async def api_run_ingest_filings():
+    from scanner.web.scheduler import _job_filings, scheduler_status
+    await asyncio.to_thread(_job_filings)
+    if scheduler_status.get("last_filings_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Filings ingest completed with errors — check server logs"}
+
+
+@app.post("/api/run/cleanup-filings")
+async def api_run_cleanup_filings():
+    from scanner.web.scheduler import _job_cleanup_filings, scheduler_status
+    await asyncio.to_thread(_job_cleanup_filings)
+    if scheduler_status.get("last_cleanup_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
+
+
+def _compute_fwd_returns(entries: list[dict], conn) -> dict[tuple, dict]:
+    from collections import defaultdict
+    by_date: dict[str, list[dict]] = defaultdict(list)
+    for e in entries:
+        if e.get("price") is not None:
+            by_date[e["scan_date"]].append(e)
+    result: dict[tuple, dict] = {}
+    for scan_date, date_entries in by_date.items():
+        tickers = list({e["ticker"] for e in date_entries})
+        if not tickers:
+            continue
+        placeholders = ", ".join(["?" for _ in tickers])
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT ticker, adj_close, rn
+                FROM (
+                    SELECT ticker, adj_close,
+                           ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date) AS rn
+                    FROM prices
+                    WHERE ticker IN ({placeholders}) AND date > ?
+                ) t
+                WHERE rn IN (5, 10, 20)
+                """,
+                tickers + [scan_date],
+            ).fetchall()
+        except Exception as exc:
+            logger.warning("fwd returns query failed for %s: %s", scan_date, exc)
+            continue
+        fwd_prices: dict[str, dict[int, float]] = {}
+        for tkr, close, rn in rows:
+            fwd_prices.setdefault(tkr, {})[int(rn)] = float(close)
+        for e in date_entries:
+            tkr = e["ticker"]
+            cap = e["price"]
+            fp = fwd_prices.get(tkr, {})
+            key = (e["scan_date"], tkr, e["parent"])
+            result[key] = {
+                "fwd_5d":  (fp[5]  - cap) / cap if 5  in fp and cap else None,
+                "fwd_10d": (fp[10] - cap) / cap if 10 in fp and cap else None,
+                "fwd_20d": (fp[20] - cap) / cap if 20 in fp and cap else None,
+            }
+    return result
+
+
+def _capture_journal_sync() -> dict:
+    import math
+
+    from scanner.db import get_connection
+    from scanner.graph.loader import MEGA_CAPS, get_dependents
+    from scanner.signals.relative_strength import RelativeStrengthVsParent
+    from scanner.enrichment.insiders import get_insider_summary
+    from scanner.signals.base import (
+        classify_action, score_rank, classify_regime,
+        TRADEABLE_REGIMES, VALIDATED_PARENTS,
+    )
+    from scanner.signals.confirmation import compute_confirmation_dependent
+
+    scan_date = str(date.today())
+    conn = get_connection()
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM journal WHERE scan_date = ? LIMIT 1", [scan_date]
+        ).fetchone()
+        if exists:
+            return {"status": "exists", "message": f"Already captured today ({scan_date})"}
+
+        insider_count = conn.execute("SELECT COUNT(*) FROM insider_transactions").fetchone()[0]
+        show_insiders = insider_count > 0
+        estimates_count = conn.execute("SELECT COUNT(*) FROM estimates").fetchone()[0]
+        show_estimates = estimates_count > 0
+
+        parent_regimes: dict[str, str] = {}
+        parent_returns: dict[str, float] = {}
+        for mc in MEGA_CAPS:
+            ret = _rolling_return_pct(mc, 20, scan_date, conn)
+            parent_regimes[mc] = classify_regime(ret)
+            parent_returns[mc] = ret
+
+        per_parent: dict[str, list[tuple[str, float]]] = {}
+        for parent in MEGA_CAPS:
+            edges = get_dependents(parent)
+            if not edges:
+                continue
+            signal = RelativeStrengthVsParent(parent=parent, lookback=20)
+            seen: dict[str, float] = {}
+            for edge in edges:
+                if edge.child in seen:
+                    continue
+                s = signal.compute(edge.child, scan_date, conn)
+                if not math.isnan(s):
+                    seen[edge.child] = s
+            per_parent[parent] = sorted(seen.items(), key=lambda x: x[1], reverse=True)
+
+        universe_scores = [s for rows in per_parent.values() for _, s in rows]
+        all_tickers = list({t for scored in per_parent.values() for t, _ in scored})
+
+        est_scores: dict[str, float | None] = {}
+        if show_estimates:
+            for t in all_tickers:
+                row = conn.execute(
+                    "SELECT revision_score FROM estimates WHERE ticker = ? ORDER BY date DESC LIMIT 1",
+                    [t],
+                ).fetchone()
+                est_scores[t] = row[0] if row else None
+
+        rvol_scores = _batch_rvol(all_tickers, scan_date, conn)
+        above_50ma_flags = _batch_above_50ma(all_tickers, scan_date, conn)
+
+        insider_summaries: dict[str, dict] = {}
+        if show_insiders:
+            as_of_date = date.fromisoformat(scan_date)
+            for t in all_tickers:
+                insider_summaries[t] = get_insider_summary(t, as_of_date, conn)
+
+        earnings_next_dates_j: dict[str, object] = {}
+        try:
+            ec = conn.execute("SELECT COUNT(*) FROM earnings_dates").fetchone()[0]
+            if ec > 0:
+                placeholders = ", ".join(["?" for _ in all_tickers])
+                for tkr, nd in conn.execute(
+                    f"SELECT ticker, next_earnings_date FROM earnings_dates WHERE ticker IN ({placeholders})",
+                    all_tickers,
+                ).fetchall():
+                    earnings_next_dates_j[tkr] = nd
+        except Exception as exc:
+            logger.warning("journal earnings date batch load failed: %s", exc)
+
+        ticker_prices = _fetch_current_prices(all_tickers)
+        j_as_of_date = date.fromisoformat(scan_date)
+
+        def _j_earnings_days(ticker: str) -> int | None:
+            nd = earnings_next_dates_j.get(ticker)
+            if nd is None:
+                return None
+            nd_date = nd.date() if hasattr(nd, "date") else nd
+            delta = (nd_date - j_as_of_date).days
+            return delta if delta >= 0 else None
+
+        rows_added = 0
+        for parent in MEGA_CAPS:
+            scored = per_parent.get(parent)
+            if not scored:
+                continue
+            regime = parent_regimes.get(parent, "UNKNOWN")
+            ret_20d = parent_returns.get(parent, float("nan"))
+            is_tradeable = regime in TRADEABLE_REGIMES
+            is_validated = parent in VALIDATED_PARENTS
+
+            shown: set[str] = set()
+            top3 = scored[:3]
+            bot3 = [(t, s) for t, s in scored[-3:] if t not in {tt for tt, _ in top3}]
+
+            for items in [top3, bot3]:
+                for ticker, s in items:
+                    if ticker in shown:
+                        continue
+                    shown.add(ticker)
+                    action = classify_action(s, universe_scores)
+                    rank, total = score_rank(s, universe_scores)
+
+                    if not is_validated:
+                        action_label = "WAIT - unvalidated"
+                    elif is_tradeable:
+                        action_label = str(action)
+                    else:
+                        action_label = "WAIT"
+
+                    ins = insider_summaries.get(ticker, {}) if show_insiders else {}
+                    cat = _insider_category(ins)
+                    if cat == "cluster":
+                        n_buyers = ins.get("distinct_insiders", 0)
+                        note = (
+                            f"{n_buyers} insiders bought {ticker} in last 30d; "
+                            f"not actionable until {parent} pulls back."
+                        )
+                    else:
+                        note = ""
+
+                    rvol_val = rvol_scores.get(ticker, float("nan"))
+                    rev_score_val = est_scores.get(ticker) if show_estimates else None
+                    insider_buying = ins.get("buy_count", 0) > 0
+                    above_50ma = above_50ma_flags.get(ticker, False)
+                    confirm = compute_confirmation_dependent(
+                        rs_score=s,
+                        rvol=rvol_val,
+                        rev_score=rev_score_val,
+                        insider_buying=insider_buying,
+                        above_50ma=above_50ma,
+                    )
+
+                    conn.execute(
+                        """INSERT OR REPLACE INTO journal
+                           (scan_date, ticker, parent, parent_regime, price, rs_score, rank,
+                            action_label, est_rev, rvol, confirm, insider_annotation,
+                            earnings_days, parent_20d_return, notes)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        [
+                            scan_date, ticker, parent, regime,
+                            ticker_prices.get(ticker),
+                            s if not math.isnan(s) else None,
+                            f"({rank}/{total})", action_label,
+                            rev_score_val,
+                            _nan_to_none(rvol_val),
+                            confirm, cat,
+                            _j_earnings_days(ticker),
+                            ret_20d if not math.isnan(ret_20d) else None,
+                            note,
+                        ],
+                    )
+                    rows_added += 1
+
+        return {"status": "success", "rows_added": rows_added}
+    finally:
+        conn.close()
+
+
+@app.post("/api/journal/capture")
+async def api_journal_capture():
+    try:
+        result = await asyncio.to_thread(_capture_journal_sync)
+        if result.get("status") == "success":
+            _cache.pop("journal", None)
+            _cache.pop("journal_dates", None)
+            _cache.pop("journal_perf", None)
+        return result
+    except Exception as exc:
+        logger.error("api_journal_capture failed: %s", exc)
+        return {"status": "failed", "error": str(exc)}
+
+
+@app.get("/api/journal/dates")
+async def api_journal_dates():
+    cached = _cache_get("journal_dates")
+    if cached is not None:
+        return cached
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT scan_date FROM journal ORDER BY scan_date DESC"
+        ).fetchall()
+        result = {"dates": [str(r[0]) for r in rows]}
+    except Exception as exc:
+        logger.error("api_journal_dates failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    _cache_set("journal_dates", result)
+    return result
+
+
+def _compute_journal_perf_sync() -> dict:
+    from collections import defaultdict
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT scan_date, ticker, parent, action_label, price FROM journal WHERE price IS NOT NULL ORDER BY scan_date"
+        ).fetchall()
+        if not rows:
+            return {"buckets": {}}
+        entries = [
+            {"scan_date": str(r[0]), "ticker": r[1], "parent": r[2], "action_label": r[3], "price": r[4]}
+            for r in rows
+        ]
+        fwd = _compute_fwd_returns(entries, conn)
+        buckets: dict = defaultdict(lambda: {"count": 0, "r5": [], "r10": [], "r20": []})
+        for e in entries:
+            key = (e["scan_date"], e["ticker"], e["parent"])
+            fd = fwd.get(key, {})
+            b = buckets[(e["action_label"] or "").upper()]
+            b["count"] += 1
+            if fd.get("fwd_5d") is not None:
+                b["r5"].append(fd["fwd_5d"])
+            if fd.get("fwd_10d") is not None:
+                b["r10"].append(fd["fwd_10d"])
+            if fd.get("fwd_20d") is not None:
+                b["r20"].append(fd["fwd_20d"])
+        def _avg(lst): return sum(lst) / len(lst) if lst else None
+        def _hr(lst): return sum(1 for x in lst if x > 0) / len(lst) if lst else None
+        result: dict = {}
+        for label, b in buckets.items():
+            result[label] = {
+                "count": b["count"],
+                "avg_5d": _avg(b["r5"]),
+                "avg_10d": _avg(b["r10"]),
+                "avg_20d": _avg(b["r20"]),
+                "hit_rate_10d": _hr(b["r10"]),
+                "n_with_returns": len(b["r10"]),
+            }
+        return {"buckets": result}
+    except Exception as exc:
+        logger.error("journal perf compute failed: %s", exc)
+        return {"buckets": {}}
+    finally:
+        conn.close()
+
+
+@app.get("/api/journal/performance")
+async def api_journal_performance():
+    cached = _cache_get("journal_perf")
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_journal_perf_sync)
+    except Exception as exc:
+        logger.error("api_journal_performance failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    _cache_set("journal_perf", result)
+    return result
+
+
+@app.get("/api/journal/{scan_date}")
+async def api_journal_for_date(scan_date: str):
+    from scanner.db import get_connection
+    conn = get_connection()
+    entries: list[dict] = []
+    try:
+        rows = conn.execute(
+            """SELECT scan_date, ticker, parent, parent_regime, price, rs_score,
+                      rank, action_label, est_rev, rvol, confirm, insider_annotation,
+                      earnings_days, parent_20d_return, notes
+               FROM journal
+               WHERE scan_date = ?
+               ORDER BY parent, ticker""",
+            [scan_date],
+        ).fetchall()
+        cols = ["scan_date", "ticker", "parent", "parent_regime", "price", "rs_score",
+                "rank", "action_label", "est_rev", "rvol", "confirm", "insider_annotation",
+                "earnings_days", "parent_20d_return", "notes"]
+        for r in rows:
+            e = dict(zip(cols, r))
+            if e["scan_date"] is not None:
+                e["scan_date"] = str(e["scan_date"])
+            entries.append(e)
+        fwd = _compute_fwd_returns(entries, conn)
+        for e in entries:
+            key = (e["scan_date"], e["ticker"], e["parent"])
+            fd = fwd.get(key, {})
+            e["fwd_5d"] = fd.get("fwd_5d")
+            e["fwd_10d"] = fd.get("fwd_10d")
+            e["fwd_20d"] = fd.get("fwd_20d")
+    except Exception as exc:
+        logger.error("api_journal_for_date failed for %s: %s", scan_date, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"entries": entries}
+
+
+class _NotesUpdate(BaseModel):
+    notes: str
+
+
+@app.patch("/api/journal/{scan_date}/{ticker}/{parent}/notes")
+async def api_journal_patch_notes(scan_date: str, ticker: str, parent: str, body: _NotesUpdate):
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        result = conn.execute(
+            "UPDATE journal SET notes = ? WHERE scan_date = ? AND ticker = ? AND parent = ?",
+            [body.notes, scan_date, ticker, parent],
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Journal entry not found")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("api_journal_patch_notes failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    _cache.pop("journal", None)
+    _cache.pop("journal_dates", None)
+    return {"status": "ok"}
+
+
+def _compute_activity_log_sync() -> dict:
+    from scanner.db import get_connection
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT run_time, job_name, status, message
+            FROM scheduler_runs
+            ORDER BY run_time DESC
+            LIMIT 50
+            """
+        ).fetchall()
+        return {
+            "entries": [
+                {
+                    "logged_at": str(r[0]),
+                    "job_name": r[1],
+                    "status": r[2],
+                    "message": r[3] or "",
+                }
+                for r in rows
+            ]
+        }
+    except Exception as exc:
+        logger.error("activity log fetch failed: %s", exc)
+        return {"entries": []}
+    finally:
+        conn.close()
+
+
+@app.get("/api/activity-log")
+async def api_activity_log():
+    try:
+        return await asyncio.to_thread(_compute_activity_log_sync)
+    except Exception as exc:
+        logger.error("api_activity_log failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/status")
+def api_status():
+    from scanner.web.scheduler import get_scheduler_info
+    from scanner.db import get_connection
+
+    last_updated = None
+    try:
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                """
+                SELECT MAX(run_time) FROM scheduler_runs
+                WHERE job_name IN ('ingest', 'ingest-estimates')
+                """
+            ).fetchone()
+            if row and row[0] is not None:
+                last_updated = str(row[0])
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.error("api_status: failed to query scheduler_runs: %s", exc)
+
+    sched = get_scheduler_info()
+
+    return {
+        "last_updated": last_updated,
+        "scheduler_running": sched["running"],
+        "jobs": sched["jobs"],
+        "cache_keys": list(_cache.keys()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Macro Observations endpoints
+# ---------------------------------------------------------------------------
+
+class _ObservationCreate(BaseModel):
+    observation_date: str
+    type: str
+    primary_ticker: str
+    affected_tickers: list[str] = []
+    note: str
+    link: str = ""
+
+
+class _ObservationUpdate(BaseModel):
+    observation_date: str
+    type: str
+    primary_ticker: str
+    affected_tickers: list[str] = []
+    note: str
+    link: str = ""
+
+
+def _get_observations_sync() -> dict:
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, observation_date, type, primary_ticker,
+                   affected_tickers, note, link, created_at
+            FROM macro_observations
+            WHERE observation_date >= CURRENT_DATE - INTERVAL 7 DAY
+            ORDER BY observation_date DESC, created_at DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        return {
+            "observations": [
+                {
+                    "id": r[0],
+                    "observation_date": str(r[1]),
+                    "type": r[2],
+                    "primary_ticker": r[3],
+                    "affected_tickers": r[4].split(",") if r[4] else [],
+                    "note": r[5],
+                    "link": r[6] or "",
+                    "created_at": str(r[7]),
+                }
+                for r in rows
+            ]
+        }
+    except Exception as exc:
+        logger.error("get_observations failed: %s", exc)
+        return {"observations": []}
+    finally:
+        conn.close()
+
+
+@app.get("/api/observations")
+async def api_get_observations():
+    try:
+        return await asyncio.to_thread(_get_observations_sync)
+    except Exception as exc:
+        logger.error("api_get_observations failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _create_observation_sync(body: dict) -> dict:
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        next_id = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM macro_observations"
+        ).fetchone()[0]
+        affected_str = ",".join(body.get("affected_tickers", [])) if body.get("affected_tickers") else None
+        conn.execute(
+            """
+            INSERT INTO macro_observations
+                (id, observation_date, type, primary_ticker, affected_tickers, note, link, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                next_id,
+                body["observation_date"],
+                body["type"],
+                body["primary_ticker"],
+                affected_str,
+                body["note"],
+                body.get("link") or None,
+                datetime.utcnow(),
+            ],
+        )
+        # Append note fragment to journal entries for primary + affected tickers
+        note_fragment = f"[{body['type']}] {body['note']}"
+        obs_date = body["observation_date"]
+        all_tickers = [body["primary_ticker"]] + list(body.get("affected_tickers") or [])
+        updated = 0
+        for ticker in all_tickers:
+            rows = conn.execute(
+                "SELECT scan_date, ticker, parent, notes FROM journal WHERE scan_date = ? AND ticker = ?",
+                [obs_date, ticker],
+            ).fetchall()
+            for row in rows:
+                existing = row[3] or ""
+                new_notes = (existing + " | " + note_fragment) if existing else note_fragment
+                conn.execute(
+                    "UPDATE journal SET notes = ? WHERE scan_date = ? AND ticker = ? AND parent = ?",
+                    [new_notes, obs_date, ticker, row[2]],
+                )
+                updated += 1
+        _cache.pop("journal", None)
+        _cache.pop("journal_dates", None)
+        return {"status": "saved", "id": next_id, "journal_updated": updated}
+    except Exception as exc:
+        logger.error("create_observation failed: %s", exc)
+        raise
+    finally:
+        conn.close()
+
+
+@app.post("/api/observations")
+async def api_create_observation(body: _ObservationCreate):
+    try:
+        result = await asyncio.to_thread(_create_observation_sync, body.model_dump())
+        return result
+    except Exception as exc:
+        logger.error("api_create_observation failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _update_observation_sync(obs_id: int, body: dict) -> dict:
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM macro_observations WHERE id = ?", [obs_id]
+        ).fetchone()
+        if not existing:
+            raise ValueError(f"Observation {obs_id} not found")
+        affected_str = ",".join(body.get("affected_tickers", [])) if body.get("affected_tickers") else None
+        conn.execute(
+            """
+            UPDATE macro_observations
+            SET observation_date = ?, type = ?, primary_ticker = ?,
+                affected_tickers = ?, note = ?, link = ?
+            WHERE id = ?
+            """,
+            [
+                body["observation_date"],
+                body["type"],
+                body["primary_ticker"],
+                affected_str,
+                body["note"],
+                body.get("link") or None,
+                obs_id,
+            ],
+        )
+        return {"status": "saved", "id": obs_id, "journal_updated": 0}
+    except ValueError:
+        raise
+    except Exception as exc:
+        logger.error("update_observation failed: %s", exc)
+        raise
+    finally:
+        conn.close()
+
+
+@app.put("/api/observations/{obs_id}")
+async def api_update_observation(obs_id: int, body: _ObservationUpdate):
+    try:
+        result = await asyncio.to_thread(_update_observation_sync, obs_id, body.model_dump())
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("api_update_observation failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _delete_observation_sync(obs_id: int) -> dict:
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        result = conn.execute(
+            "DELETE FROM macro_observations WHERE id = ?", [obs_id]
+        )
+        if result.rowcount == 0:
+            raise ValueError(f"Observation {obs_id} not found")
+        return {"status": "deleted"}
+    except ValueError:
+        raise
+    except Exception as exc:
+        logger.error("delete_observation failed: %s", exc)
+        raise
+    finally:
+        conn.close()
+
+
+@app.delete("/api/observations/{obs_id}")
+async def api_delete_observation(obs_id: int):
+    try:
+        return await asyncio.to_thread(_delete_observation_sync, obs_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("api_delete_observation failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Graph dependents endpoint (used by observation modal)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/graph/dependents/{parent}")
+def api_graph_dependents(parent: str):
+    try:
+        from scanner.graph.loader import get_dependents
+        edges = get_dependents(parent.upper())
+        return {"dependents": [e.child for e in edges]}
+    except Exception as exc:
+        logger.error("api_graph_dependents failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 8-K Filings endpoints
+# ---------------------------------------------------------------------------
+
+class _FilingJournalSave(BaseModel):
+    note: str
+    affected_tickers: list[str] = []
+    observation_date: str
+
+
+class _FilingImpactUpdate(BaseModel):
+    impact: str
+    impact_source: str = "manual"
+
+
+def _get_filings_sync(universe: str, ticker_filter: str | None) -> dict:
+    from scanner.db import get_connection
+    from scanner.graph.loader import get_all_tickers, MEGA_CAPS
+
+    conn = get_connection()
+    try:
+        # Determine which tickers to include
+        all_tickers = get_all_tickers()
+        megacap_set: set[str] = set(MEGA_CAPS)
+
+        if universe == "megacap":
+            ticker_scope = [t for t in all_tickers if t in megacap_set]
+        elif universe == "dependent":
+            ticker_scope = [t for t in all_tickers if t not in megacap_set]
+        else:
+            ticker_scope = all_tickers
+
+        if ticker_filter:
+            ticker_scope = [t for t in ticker_scope if t == ticker_filter.upper()]
+
+        if not ticker_scope:
+            return {"groups": []}
+
+        placeholders = ", ".join(["?" for _ in ticker_scope])
+        rows = conn.execute(
+            f"""
+            SELECT id, ticker, filed_date, accession_number, form_type,
+                   item_numbers, title, description, filing_url,
+                   saved_to_journal, ingested_at, impact, impact_source, summary
+            FROM filings_8k
+            WHERE ticker IN ({placeholders})
+              AND filed_date >= CURRENT_DATE - INTERVAL 7 DAY
+            ORDER BY ticker, filed_date DESC, impact DESC
+            """,
+            ticker_scope,
+        ).fetchall()
+
+        # Group by ticker; megacaps first
+        groups_map: dict[str, dict] = {}
+        for r in rows:
+            t = r[1]
+            if t not in groups_map:
+                groups_map[t] = {
+                    "ticker": t,
+                    "is_megacap": t in megacap_set,
+                    "filing_count": 0,
+                    "filings": [],
+                }
+            groups_map[t]["filing_count"] += 1
+            groups_map[t]["filings"].append({
+                "id": r[0],
+                "ticker": r[1],
+                "filed_date": str(r[2]),
+                "accession_number": r[3],
+                "form_type": r[4],
+                "item_numbers": r[5] or "",
+                "title": r[6] or "",
+                "description": r[7] or "",
+                "filing_url": r[8] or "",
+                "saved_to_journal": bool(r[9]),
+                "ingested_at": str(r[10]),
+                "impact": r[11] or "LOW",
+                "impact_source": r[12] or "auto",
+                "summary": r[13] or "",
+            })
+
+        # Sort: megacaps first, then dependents; within each group alpha by ticker
+        groups = sorted(
+            groups_map.values(),
+            key=lambda g: (0 if g["is_megacap"] else 1, g["ticker"]),
+        )
+        return {"groups": groups}
+    finally:
+        conn.close()
+
+
+def _save_filing_to_journal_sync(filing_id: int, body: dict) -> dict:
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT ticker, item_numbers, title, form_type FROM filings_8k WHERE id = ?",
+            [filing_id],
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Filing {filing_id} not found")
+
+        ticker, item_numbers, title, form_type = row
+        note = body["note"]
+        affected = body.get("affected_tickers", [])
+        obs_date = body["observation_date"]
+
+        # Build item label for the note prefix
+        first_item = (item_numbers or "").split(",")[0].strip() if item_numbers else ""
+        item_label_map = {
+            "1.01": "Material Agreement", "1.02": "Agreement Terminated",
+            "2.01": "Asset Acquisition/Disposal", "2.02": "Results of Operations",
+            "2.05": "Employee Departure", "5.02": "Executive Change",
+            "7.01": "Regulation FD", "8.01": "Other Material Event",
+        }
+        item_label = item_label_map.get(first_item, form_type)
+        note_prefix = f"[8-K: {item_label}]"
+        full_note = f"{note_prefix} {note}"
+
+        # Insert macro_observation
+        next_id = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM macro_observations"
+        ).fetchone()[0]
+        affected_str = ",".join(affected) if affected else None
+        conn.execute(
+            """
+            INSERT INTO macro_observations
+                (id, observation_date, type, primary_ticker, affected_tickers, note, link, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [next_id, obs_date, "8-K", ticker, affected_str, full_note, None, datetime.utcnow()],
+        )
+
+        # Append note to journal entries for primary + affected tickers
+        all_tickers = [ticker] + [t for t in affected if t != ticker]
+        for t in all_tickers:
+            existing = conn.execute(
+                """
+                SELECT notes FROM journal
+                WHERE ticker = ? AND scan_date = (
+                    SELECT MAX(scan_date) FROM journal WHERE ticker = ?
+                )
+                """,
+                [t, t],
+            ).fetchone()
+            if existing is None:
+                continue
+            current_notes = existing[0] or ""
+            sep = " | " if current_notes else ""
+            new_notes = current_notes + sep + full_note
+            conn.execute(
+                """
+                UPDATE journal
+                SET notes = ?
+                WHERE ticker = ? AND scan_date = (
+                    SELECT MAX(scan_date) FROM journal WHERE ticker = ?
+                )
+                """,
+                [new_notes, t, t],
+            )
+
+        # Mark filing as saved
+        conn.execute(
+            "UPDATE filings_8k SET saved_to_journal = TRUE WHERE id = ?",
+            [filing_id],
+        )
+        for _k in [k for k in _cache if k.startswith("filings:")]:
+            _cache.pop(_k, None)
+        return {"status": "ok", "journal_updated": len(all_tickers)}
+    finally:
+        conn.close()
+
+
+def _update_filing_impact_sync(filing_id: int, body: dict) -> dict:
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM filings_8k WHERE id = ?", [filing_id]).fetchone()
+        if row is None:
+            raise ValueError(f"Filing {filing_id} not found")
+        impact = body["impact"].upper()
+        if impact not in ("HIGH", "MEDIUM", "LOW"):
+            raise ValueError(f"Invalid impact value: {impact}")
+        conn.execute(
+            "UPDATE filings_8k SET impact = ?, impact_source = ? WHERE id = ?",
+            [impact, body.get("impact_source", "manual"), filing_id],
+        )
+        for _k in [k for k in _cache if k.startswith("filings:")]:
+            _cache.pop(_k, None)
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@app.get("/api/filings")
+async def api_get_filings(
+    universe: str = Query(default="all", pattern="^(all|megacap|dependent)$"),
+    ticker: str | None = Query(default=None),
+):
+    cache_key = f"filings:{universe}:{ticker or ''}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_get_filings_sync, universe, ticker)
+        _cache_set(cache_key, result)
+        return result
+    except Exception as exc:
+        logger.error("api_get_filings failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/filings/{filing_id}/journal")
+async def api_save_filing_to_journal(filing_id: int, body: _FilingJournalSave):
+    try:
+        return await asyncio.to_thread(_save_filing_to_journal_sync, filing_id, body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("api_save_filing_to_journal failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.patch("/api/filings/{filing_id}/impact")
+async def api_update_filing_impact(filing_id: int, body: _FilingImpactUpdate):
+    try:
+        return await asyncio.to_thread(_update_filing_impact_sync, filing_id, body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("api_update_filing_impact failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))

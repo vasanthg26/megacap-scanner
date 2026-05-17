@@ -1,0 +1,168 @@
+edges:
+  # NVDA dependents
+  - parent: NVDA
+    child: VRT
+    type: cooling
+    weight: 0.8
+    notes: Liquid cooling reference design partner for GPU data centers
+
+  - parent: NVDA
+    child: MOD
+    type: cooling
+    weight: 0.7
+    notes: Thermal management components for NVDA GPU systems
+
+  - parent: NVDA
+    child: COHR
+    type: optical
+    weight: 0.75
+    notes: High-speed optical transceivers for NVDA NVLink/InfiniBand
+
+  - parent: NVDA
+    child: ANET
+    type: networking
+    weight: 0.85
+    notes: Network switching for NVDA GPU cluster interconnects
+
+  - parent: NVDA
+    child: CRDO
+    type: semiconductor
+    weight: 0.7
+    notes: SerDes chiplets used in NVDA networking stack
+
+  - parent: NVDA
+    child: ALAB
+    type: semiconductor
+    weight: 0.65
+    notes: Silicon photonics for next-gen GPU interconnect
+
+  - parent: NVDA
+    child: SMCI
+    type: systems
+    weight: 0.8
+    notes: GPU server systems integrator, primary ODM partner
+
+  - parent: NVDA
+    child: DELL
+    type: systems
+    weight: 0.6
+    notes: Enterprise GPU server packaging and distribution
+
+  # MSFT dependents
+  - parent: MSFT
+    child: VRT
+    type: cooling
+    weight: 0.75
+    notes: Azure data center cooling infrastructure
+
+  - parent: MSFT
+    child: CEG
+    type: power
+    weight: 0.7
+    notes: Nuclear power supply for Azure AI data centers
+
+  - parent: MSFT
+    child: VST
+    type: power
+    weight: 0.65
+    notes: Electricity generation for hyperscale data centers
+
+  - parent: MSFT
+    child: GEV
+    type: power
+    weight: 0.6
+    notes: Gas turbine power generation for data centers
+
+  - parent: MSFT
+    child: OKLO
+    type: power
+    weight: 0.5
+    notes: Next-gen nuclear microreactors for data center power
+
+  # META dependents
+  - parent: META
+    child: VRT
+    type: cooling
+    weight: 0.7
+    notes: Data center cooling for Meta AI infrastructure
+
+  - parent: META
+    child: ARM
+    type: semiconductor
+    weight: 0.65
+    notes: ARM architecture underpins Meta's MTIA AI accelerators
+
+  # AAPL dependents
+  - parent: AAPL
+    child: TSM
+    type: foundry
+    weight: 0.95
+    notes: Primary foundry for all Apple silicon (A/M series chips)
+
+  - parent: AAPL
+    child: QRVO
+    type: rf
+    weight: 0.75
+    notes: RF front-end modules for iPhone cellular connectivity
+
+  - parent: AAPL
+    child: SWKS
+    type: rf
+    weight: 0.75
+    notes: RF semiconductors for iPhone wireless
+
+  - parent: AAPL
+    child: CRUS
+    type: audio
+    weight: 0.7
+    notes: Audio codecs and haptics controllers for iPhone/Mac
+
+  - parent: AAPL
+    child: AVGO
+    type: semiconductor
+    weight: 0.8
+    notes: WiFi/BT chips and custom ASIC partnership
+
+  # AMZN dependents
+  - parent: AMZN
+    child: AVGO
+    type: semiconductor
+    weight: 0.75
+    notes: Networking chips for AWS data center fabric
+
+  - parent: AMZN
+    child: MRVL
+    type: semiconductor
+    weight: 0.7
+    notes: Custom silicon (Graviton/Trainium) and networking for AWS
+
+  # TSLA dependents
+  - parent: TSLA
+    child: ALB
+    type: materials
+    weight: 0.75
+    notes: Lithium supply for Tesla battery cells
+
+  - parent: TSLA
+    child: SQM
+    type: materials
+    weight: 0.7
+    notes: Lithium carbonate supplier for battery production
+
+  - parent: TSLA
+    child: LTHM
+    type: materials
+    weight: 0.65
+    notes: Lithium hydroxide for high-energy battery cells
+
+  - parent: TSLA
+    child: "ON"
+    type: semiconductor
+    weight: 0.7
+    notes: SiC power modules for Tesla inverter systems
+
+  - parent: TSLA
+    child: STM
+    type: semiconductor
+    weight: 0.65
+    notes: SiC MOSFET supplier for Tesla Model 3/Y powertrain

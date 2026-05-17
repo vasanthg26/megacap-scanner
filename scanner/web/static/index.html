@@ -1,0 +1,1829 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mega-Cap Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #080d14;
+  --surface: #0d1520;
+  --border:  #1a2535;
+  --text:    #e2e8f4;
+  --muted:   #6b7fa3;
+  --dim:     #2d3748;
+  --green:   #00ff9d;
+  --yellow:  #f0c040;
+  --red:     #ff4d6d;
+  --blue:    #4f9eff;
+  --orange:  #f97316;
+}
+[data-theme="light"] {
+  --bg:      #f8fafc;
+  --surface: #ffffff;
+  --border:  #c8d4e3;
+  --text:    #0a0f1a;
+  --muted:   #3d4f6b;
+  --dim:     #7a8ba8;
+  --green:   #0a7c4e;
+  --yellow:  #b35c00;
+  --red:     #c0152a;
+  --blue:    #1a56b0;
+  --orange:  #c44b00;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; transition: background 0.2s ease, color 0.2s ease; }
+
+/* ── Sidebar ─────────────────────────── */
+#sidebar {
+  position: fixed; left: 0; top: 0; width: 220px; height: 100vh;
+  background: #0a1018; border-right: 1px solid #1a2535;
+  display: flex; flex-direction: column; z-index: 200; overflow-y: auto;
+}
+[data-theme="light"] #sidebar { background: #f1f5f9; border-right-color: var(--border); }
+
+#sidebar-logo {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 14px 12px; flex-shrink: 0;
+}
+#logo-monogram {
+  width: 32px; height: 32px; background: var(--blue); color: #fff;
+  font-family: 'Inter', sans-serif; font-weight: 700; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 6px; flex-shrink: 0; letter-spacing: -0.5px;
+}
+#logo-name {
+  font-family: 'Inter', sans-serif; font-weight: 600; font-size: 13px;
+  color: var(--text); line-height: 1.3;
+}
+
+#sidebar-search-wrap {
+  margin: 0 10px 8px; position: relative; flex-shrink: 0;
+}
+#sidebar-search-icon {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--muted); pointer-events: none;
+}
+#sidebar-search {
+  width: 100%; height: 32px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-family: 'Inter', sans-serif; font-size: 12px;
+  padding: 0 8px 0 28px; outline: none; transition: border-color 0.15s ease;
+}
+#sidebar-search::placeholder { color: var(--muted); }
+#sidebar-search:focus { border-color: var(--blue); }
+
+#nav-list { flex: 1; padding: 4px 8px; overflow-y: auto; }
+.nav-sep {
+  font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 600;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em;
+  padding: 12px 6px 4px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 8px;
+  height: 36px; border-radius: 6px; padding: 0 12px;
+  color: var(--muted); font-family: 'Inter', sans-serif; font-size: 13px;
+  cursor: pointer; border: none; background: none; width: 100%; text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+  border-left: 2px solid transparent;
+}
+.nav-item:hover { background: #131f2e; color: var(--text); }
+[data-theme="light"] .nav-item:hover { background: #e2e8f0; }
+.nav-item.active { background: #1a2d44; color: var(--blue); border-left-color: var(--blue); padding-left: 10px; }
+[data-theme="light"] .nav-item.active { background: #d0e4f7; }
+.nav-icon { font-size: 15px; flex-shrink: 0; }
+
+#sidebar-bottom {
+  flex-shrink: 0; padding: 10px 8px;
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.sb-btn {
+  display: flex; align-items: center; gap: 8px; height: 34px;
+  border-radius: 6px; padding: 0 12px; color: var(--muted);
+  font-family: 'Inter', sans-serif; font-size: 12px;
+  cursor: pointer; border: none; background: none;
+  width: 100%; text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.sb-btn:hover { background: #131f2e; color: var(--text); }
+[data-theme="light"] .sb-btn:hover { background: #e2e8f0; }
+#sb-last-updated {
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+  color: var(--dim); padding: 0 12px 6px;
+}
+
+/* ── Topbar ──────────────────────────── */
+#topbar {
+  position: fixed; left: 220px; right: 0; top: 0; height: 48px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; z-index: 100;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+#breadcrumb { font-family: 'Inter', sans-serif; font-size: 13px; color: var(--muted); }
+.bc-sep { margin: 0 6px; color: var(--dim); }
+.bc-active { color: var(--text); font-weight: 500; }
+#topbar-right { display: flex; align-items: center; gap: 10px; }
+#correction-badge {
+  display: none; background: rgba(255,77,109,0.12);
+  color: var(--red); border: 1px solid var(--red); border-radius: 4px;
+  padding: 2px 8px; font-size: 11px; font-weight: 600; font-family: 'Inter', sans-serif;
+  white-space: nowrap;
+}
+#capture-btn {
+  background: none; border: 1px solid var(--green); color: var(--green);
+  cursor: pointer; padding: 4px 10px; font-size: 11px;
+  font-family: 'Inter', sans-serif; border-radius: 4px;
+  transition: all 0.15s ease; white-space: nowrap;
+}
+#capture-btn:hover { background: rgba(0,255,157,0.1); }
+#capture-btn:disabled { opacity: 0.5; cursor: default; }
+[data-theme="light"] #capture-btn:hover { background: rgba(10,124,78,0.1); }
+#topbar-ts {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ── Main content ────────────────────── */
+#main-content { margin-left: 220px; padding-top: 48px; min-height: 100vh; }
+
+/* ── Always-visible strip ────────────── */
+#always-visible { padding: 16px 24px 0; }
+#banner-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 16px; font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  color: var(--muted); margin-bottom: 10px;
+  display: flex; align-items: center; flex-wrap: wrap;
+}
+.banner-label { color: var(--muted); margin-right: 4px; }
+.banner-sep { color: var(--dim); margin: 0 10px; }
+.color-leading { color: var(--green); }
+.color-neutral { color: var(--yellow); }
+.color-lagging { color: var(--red); }
+.color-vix-calm { color: var(--green); }
+.color-vix-elevated { color: var(--yellow); }
+.color-vix-fear { color: var(--red); }
+#signal-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.sig-chip {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  padding: 4px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  color: var(--muted); white-space: nowrap;
+}
+.sig-chip .chip-val { font-weight: 700; }
+.sig-green .chip-val { color: var(--green); }
+.sig-yellow .chip-val { color: var(--yellow); }
+.sig-red .chip-val { color: var(--red); }
+.sig-blue .chip-val { color: var(--blue); }
+#correction-alert {
+  display: none; background: rgba(255,77,109,0.06); border: 1px solid var(--red);
+  border-left: 4px solid var(--red);
+  border-radius: 6px; padding: 10px 16px; margin-bottom: 10px;
+  font-family: 'Inter', sans-serif; font-size: 12px; color: var(--red);
+}
+[data-theme="light"] #correction-alert { background: rgba(192,21,42,0.08); }
+[data-theme="light"] #banner-card { background: #e4ecf7; }
+[data-theme="light"] .sig-chip { background: #edf2fa; }
+
+/* ── Pages ───────────────────────────── */
+#pages-container { padding: 4px 24px 40px; }
+.page { display: none; }
+.page.active { display: block; }
+.page-title { font-family: 'Inter', sans-serif; font-weight: 600; font-size: 18px; color: var(--text); margin-bottom: 4px; margin-top: 16px; }
+.page-sub { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); margin-bottom: 16px; }
+.section-header { display: flex; align-items: baseline; gap: 10px; margin: 20px 0 10px; }
+.section-title { font-family: 'Inter', sans-serif; font-weight: 600; font-size: 14px; color: var(--text); }
+.section-date { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted); }
+
+/* ── Data tables ─────────────────────── */
+.data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 1px solid var(--border); }
+.data-table th {
+  font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 500;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 8px 10px; text-align: right;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  white-space: nowrap; overflow: hidden;
+}
+.data-table th.left { text-align: left; }
+.data-table td {
+  height: 36px; padding: 0 10px; font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-bottom: 1px solid var(--border);
+}
+.data-table td.left { text-align: left; }
+.data-table tbody tr:nth-child(odd)  { background: var(--surface); }
+.data-table tbody tr:nth-child(even) { background: var(--bg); }
+.data-table tbody tr:hover { background: #111c2a; }
+[data-theme="light"] .data-table tbody tr:nth-child(odd)  { background: #ffffff; }
+[data-theme="light"] .data-table tbody tr:nth-child(even) { background: #f4f7fb; }
+[data-theme="light"] .data-table tbody tr:hover { background: #e8eef7; }
+.val-pos  { color: var(--green); }
+.val-neg  { color: var(--red); }
+.val-zero { color: var(--muted); }
+.ticker-cell {
+  font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 700;
+  color: var(--text); cursor: pointer; display: inline-block;
+}
+.ticker-cell:hover { color: var(--blue); text-decoration: underline; }
+.pill { display: inline-block; padding: 2px 7px; font-size: 10px; font-family: 'IBM Plex Mono', monospace; font-weight: 500; border-radius: 3px; white-space: nowrap; }
+.pill-leading   { border: 1px solid var(--green);  color: var(--green); }
+.pill-neutral   { border: 1px solid var(--yellow); color: var(--yellow); }
+.pill-weakening { border: 1px solid var(--red);    color: var(--red); }
+.action-strong-buy       { color: var(--green); font-weight: 700; }
+.action-buy              { color: var(--green); }
+.action-sell             { color: var(--red); }
+.action-hold             { color: var(--yellow); }
+.action-wait             { color: var(--muted); }
+.action-wait-unvalidated { color: var(--dim); }
+[data-theme="light"] .action-wait-unvalidated { color: var(--muted); font-style: italic; }
+.ins-selling { color: var(--red); }
+.ins-buy     { color: var(--green); }
+.ins-none    { color: var(--dim); }
+.rvol-high { color: var(--yellow); font-weight: 700; }
+.rvol-low  { color: var(--muted); }
+.conf-high { color: var(--green); }
+.conf-mid  { color: var(--yellow); }
+.conf-low  { color: var(--muted); }
+.expand-btn { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 10px; padding: 0 4px; }
+.expand-btn:hover { color: var(--muted); }
+.expand-row td { background: var(--bg) !important; padding: 8px 16px 12px; font-size: 11px; font-style: italic; color: var(--muted); text-align: left; height: auto; }
+.headlines-list { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.headline-item::before { content: "\B7 "; }
+.context-tag { font-style: normal; font-size: 10px; color: var(--dim); margin-left: 6px; font-family: 'IBM Plex Mono', monospace; }
+.parent-group-header td { background: #0a1118 !important; font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500; color: var(--muted); text-align: left; height: 32px; padding: 0 12px; border-bottom: 1px solid var(--border); }
+[data-theme="light"] .parent-group-header td { background: #e4ecf7 !important; }
+.regime-correction { color: var(--yellow); }
+.regime-pullback   { color: var(--yellow); }
+.regime-up         { color: var(--green); }
+.regime-drawdown   { color: var(--red); }
+.loading-overlay { padding: 40px; text-align: center; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
+.error-overlay { padding: 20px; text-align: center; color: var(--red); font-family: 'IBM Plex Mono', monospace; font-size: 12px; border: 1px solid var(--red); border-radius: 4px; margin: 16px 0; }
+
+/* ── Scheduler ───────────────────────── */
+.sched-table { width: 100%; border-collapse: collapse; font-family: 'IBM Plex Mono', monospace; font-size: 11px; margin-top: 12px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.sched-table th { text-align: left; color: var(--muted); font-weight: 400; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--surface); text-transform: uppercase; letter-spacing: 0.08em; }
+.sched-table td { padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
+.sched-table tr:last-child td { border-bottom: none; }
+.status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot-ok      { background: var(--green); }
+.dot-running { background: var(--yellow); }
+.dot-error   { background: var(--red); }
+.dot-idle    { background: var(--dim); }
+.run-btn { background: none; border: none; color: var(--blue); cursor: pointer; font-size: 11px; font-family: 'IBM Plex Mono', monospace; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+.run-btn:hover { background: var(--dim); }
+.run-btn:disabled { opacity: 0.5; cursor: default; }
+.run-ok   { color: var(--green); }
+.run-fail { color: var(--red); }
+
+/* ── Activity Log ────────────────────── */
+.activity-log { margin-top: 20px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.activity-log-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border);
+  font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 500;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+}
+.activity-log-body { max-height: 320px; overflow-y: auto; }
+.activity-log-entry {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 6px 14px; border-bottom: 1px solid var(--border);
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+}
+.activity-log-entry:last-child { border-bottom: none; }
+.log-ts { color: var(--dim); flex-shrink: 0; }
+.log-job { color: var(--blue); flex-shrink: 0; width: 130px; }
+.log-dot-ok  { color: var(--green); flex-shrink: 0; }
+.log-dot-err { color: var(--red);   flex-shrink: 0; }
+.log-msg { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-empty { padding: 16px 14px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--dim); }
+
+/* ── Journal ─────────────────────────── */
+#journal-c-journal { overflow-x: auto; }
+#journal-c-journal .data-table { min-width: 1600px; width: max-content; }
+#journal-controls { display: flex; align-items: center; gap: 12px; margin-top: 16px; margin-bottom: 12px; }
+#journal-date-select {
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  padding: 6px 10px; border-radius: 4px; cursor: pointer; outline: none;
+}
+#journal-date-select:focus { border-color: var(--blue); }
+#journal-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); }
+@keyframes j-flash {
+  0%   { background: rgba(0,255,157,0.3); }
+  100% { background: transparent; }
+}
+.j-saved { animation: j-flash 0.8s ease-out; }
+#journal-perf { margin-top: 16px; margin-bottom: 4px; min-height: 20px; }
+#journal-perf-inner { display: flex; gap: 12px; flex-wrap: wrap; }
+.j-perf-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; display: flex; align-items: center; gap: 16px; }
+.j-perf-label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+.j-perf-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.j-perf-num { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 700; color: var(--text); }
+.j-perf-sub { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--muted); }
+#journal-filters { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.j-filter { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 10px; border-radius: 4px; cursor: pointer; transition: all 0.12s ease; }
+.j-filter:hover { border-color: var(--muted); color: var(--text); }
+.j-filter.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+[data-theme="light"] .j-filter.active { color: #fff; }
+
+/* ── Search ──────────────────────────── */
+#search-box-wrap { position: relative; margin-top: 16px; margin-bottom: 16px; }
+#search-main-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 16px; color: var(--muted); pointer-events: none; }
+#search-main-input {
+  width: 100%; height: 48px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); font-family: 'Inter', sans-serif; font-size: 15px;
+  padding: 0 16px 0 46px; outline: none; transition: border-color 0.15s ease;
+}
+#search-main-input::placeholder { color: var(--muted); }
+#search-main-input:focus { border-color: var(--blue); }
+#search-results-label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+.search-group-label { font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; margin-top: 16px; }
+
+/* ── Macro Observations ─────────────── */
+#obs-section { margin-bottom: 20px; }
+#obs-header { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+#obs-header .section-title { flex: 1; }
+#obs-add-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 10px; border-radius: 4px; cursor: pointer; transition: all 0.12s ease; }
+#obs-add-btn:hover { border-color: var(--blue); color: var(--blue); }
+#obs-list { display: flex; flex-direction: column; gap: 4px; }
+.obs-row { display: flex; align-items: baseline; gap: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--text); padding: 5px 8px; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); }
+.obs-row:hover { border-color: var(--border); }
+.obs-pill { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 3px; color: #fff; flex-shrink: 0; }
+.obs-pill-8k { background: var(--blue); }
+.obs-pill-earnings { background: var(--yellow); color: #000; }
+.obs-pill-news, .obs-pill-other { background: var(--muted); }
+.obs-pill-thematic { background: #b97fff; }
+.obs-date { color: var(--muted); flex-shrink: 0; }
+.obs-ticker { font-weight: 700; flex-shrink: 0; }
+.obs-note { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.obs-affected { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.obs-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.obs-act-btn { background: none; border: none; color: var(--muted); font-size: 13px; cursor: pointer; padding: 0 2px; line-height: 1; }
+.obs-act-btn:hover { color: var(--text); }
+#obs-empty { color: var(--dim); font-family: 'IBM Plex Mono', monospace; font-size: 13px; padding: 6px 0; }
+#obs-header .section-title { font-size: 12px; }
+
+/* ── Macro Obs Modal ─────────────────── */
+#obs-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; }
+#obs-modal-overlay.open { display: flex; }
+#obs-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; width: 480px; max-width: 95vw; font-family: 'IBM Plex Mono', monospace; }
+#obs-modal h3 { margin: 0 0 16px; font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 600; color: var(--text); }
+.obs-field { margin-bottom: 12px; }
+.obs-field label { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+.obs-field input, .obs-field select, .obs-field textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 6px 8px; outline: none; box-sizing: border-box; }
+.obs-field input:focus, .obs-field select:focus, .obs-field textarea:focus { border-color: var(--blue); }
+.obs-field textarea { resize: vertical; min-height: 70px; }
+#obs-note-counter { font-size: 10px; color: var(--muted); text-align: right; margin-top: 2px; }
+#obs-affected-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow-y: auto; padding: 6px 0; }
+.obs-dep-chk { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text); cursor: pointer; }
+.obs-dep-chk input[type=checkbox] { cursor: pointer; }
+#obs-dep-controls { display: flex; gap: 8px; margin-bottom: 6px; }
+.obs-dep-ctrl { background: none; border: none; color: var(--blue); font-family: 'IBM Plex Mono', monospace; font-size: 11px; cursor: pointer; padding: 0; }
+#obs-modal-footer { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+#obs-save-btn { background: var(--blue); border: none; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 7px 18px; border-radius: 4px; cursor: pointer; }
+#obs-save-btn:hover { opacity: 0.85; }
+#obs-cancel-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 7px 14px; border-radius: 4px; cursor: pointer; }
+#obs-cancel-btn:hover { border-color: var(--muted); color: var(--text); }
+#obs-modal-toast { flex: 1; font-size: 11px; color: var(--green); }
+
+/* ── Journal macro badge ─────────────── */
+.j-macro-badge { display: inline-block; font-size: 10px; color: var(--blue); border: 1px solid var(--blue); border-radius: 3px; padding: 0 4px; margin-left: 4px; cursor: default; vertical-align: middle; }
+.j-macro-badge:hover::after { content: 'Linked from macro observation'; position: fixed; background: var(--surface); border: 1px solid var(--border); padding: 4px 8px; border-radius: 4px; font-size: 10px; color: var(--text); z-index: 3000; white-space: nowrap; }
+
+/* ── Filings page ───────────────────── */
+#filings-filter-bar { display: flex; align-items: center; gap: 12px; margin: 14px 0 16px; flex-wrap: wrap; }
+#filings-universe-btns { display: flex; gap: 6px; }
+.f-uni-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 12px; border-radius: 4px; cursor: pointer; transition: all 0.12s ease; }
+.f-uni-btn:hover { border-color: var(--muted); color: var(--text); }
+.f-uni-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+#filings-search { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 5px 10px; border-radius: 4px; outline: none; width: 200px; transition: border-color 0.15s ease; }
+#filings-search::placeholder { color: var(--muted); }
+#filings-search:focus { border-color: var(--blue); }
+#filings-content { display: flex; flex-direction: column; gap: 10px; }
+.filings-empty { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--dim); padding: 24px 0; text-align: center; }
+.filings-group { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.filings-group-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; background: var(--surface); cursor: pointer;
+  border-left: 3px solid var(--muted); user-select: none;
+  transition: background 0.12s ease;
+}
+.filings-group-header.megacap { border-left-color: var(--blue); }
+.filings-group-header:hover { background: var(--dim); }
+.fg-ticker { font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 700; color: var(--text); }
+.fg-count { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #8a9bb5; }
+[data-theme="light"] .fg-count { color: #475569; }
+.fg-chevron { margin-left: auto; font-size: 11px; color: var(--muted); transition: transform 0.2s ease; }
+.fg-chevron.open { transform: rotate(90deg); }
+.filings-group-body { display: none; flex-direction: column; }
+.filings-group-body.open { display: flex; }
+.filing-row { padding: 10px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.filing-row:first-child { border-top: none; }
+.filing-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.filing-date { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8a9bb5; flex-shrink: 0; }
+[data-theme="light"] .filing-date { color: #3d4f6b; }
+.filing-form { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--dim); flex-shrink: 0; }
+.filing-title { font-family: 'Inter', sans-serif; font-size: 12px; color: var(--text); }
+.filing-items { display: flex; gap: 5px; flex-wrap: wrap; }
+.item-pill { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; padding: 2px 6px; border-radius: 3px; color: #fff; flex-shrink: 0; }
+.item-pill-agreement { background: var(--blue); }
+.item-pill-terminated { background: var(--red); }
+.item-pill-acquisition { background: var(--orange); }
+.item-pill-results { background: var(--yellow); color: #000; }
+.item-pill-departure { background: var(--orange); }
+.item-pill-executive { background: var(--orange); }
+.item-pill-fd { background: #b97fff; }
+.item-pill-other { background: var(--muted); }
+[data-theme="light"] .item-pill-agreement { background: #15448d; }
+[data-theme="light"] .item-pill-terminated { background: #9a1122; }
+[data-theme="light"] .item-pill-acquisition { background: #9d3c00; }
+[data-theme="light"] .item-pill-results { background: #8f4900; color: #fff; }
+[data-theme="light"] .item-pill-departure { background: #9d3c00; }
+[data-theme="light"] .item-pill-executive { background: #9d3c00; }
+[data-theme="light"] .item-pill-fd { background: #8c5fd6; }
+[data-theme="light"] .item-pill-other { background: #2e3f5a; }
+.impact-pill { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 3px; cursor: pointer; border: none; flex-shrink: 0; }
+.impact-high { background: #ff4d6d22; color: var(--red); border: 1px solid var(--red); }
+.impact-medium { background: #f0c04022; color: var(--yellow); border: 1px solid var(--yellow); }
+.impact-low { background: var(--dim); color: var(--muted); border: 1px solid var(--border); }
+.filing-actions { display: flex; gap: 8px; align-items: center; }
+.filing-link-btn { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--blue); text-decoration: none; background: none; border: 1px solid var(--blue); padding: 3px 8px; border-radius: 3px; cursor: pointer; transition: all 0.12s ease; }
+.filing-link-btn:hover { background: var(--blue); color: #fff; }
+.filing-save-btn { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted); background: none; border: 1px solid var(--border); padding: 3px 8px; border-radius: 3px; cursor: pointer; transition: all 0.12s ease; }
+.filing-save-btn:hover { border-color: var(--green); color: var(--green); }
+.filing-save-btn.saved { color: var(--green); border-color: var(--green); opacity: 0.7; cursor: default; }
+.filing-summary { font-style: italic; font-size: 13px; color: #c0cce0; margin-top: 4px; }
+[data-theme="light"] .filing-summary { color: #2d3748; }
+.hf-summary { font-style: italic; font-size: 12px; color: #c0cce0; margin-top: 2px; }
+[data-theme="light"] .hf-summary { color: #2d3748; }
+.filing-inline-form { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; display: none; flex-direction: column; gap: 8px; }
+.filing-inline-form.open { display: flex; }
+.fif-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.fif-input { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 5px 8px; border-radius: 4px; outline: none; width: 100%; box-sizing: border-box; }
+.fif-input:focus { border-color: var(--blue); }
+.fif-row { display: flex; gap: 8px; align-items: center; }
+.fif-submit { background: var(--blue); border: none; color: #fff; font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 5px 14px; border-radius: 4px; cursor: pointer; }
+.fif-submit:hover { opacity: 0.85; }
+.fif-cancel { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+.fif-cancel:hover { border-color: var(--muted); color: var(--text); }
+.fif-toast { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--green); }
+.impact-dropdown-wrap { position: relative; display: inline-block; }
+.impact-dropdown { position: absolute; top: 100%; left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; z-index: 500; min-width: 100px; display: none; }
+.impact-dropdown.open { display: block; }
+.impact-opt { font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 6px 10px; cursor: pointer; color: var(--text); }
+.impact-opt:hover { background: var(--dim); }
+.j-filing-badge { display: inline-block; font-size: 10px; color: #b97fff; border: 1px solid #b97fff; border-radius: 3px; padding: 0 4px; margin-left: 4px; cursor: default; vertical-align: middle; }
+
+/* ── Tooltip ─────────────────────────── */
+.ticker-tooltip {
+  position: fixed; background: var(--surface); border: 1px solid var(--border);
+  padding: 12px; border-radius: 6px; font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+  color: var(--text); z-index: 1000; pointer-events: none; min-width: 180px;
+  line-height: 1.6; opacity: 0; transition: opacity 0.15s ease; white-space: nowrap;
+}
+.ticker-tooltip.visible { opacity: 1; }
+.tooltip-company { font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+.tooltip-line { color: var(--muted); }
+.tooltip-line span { color: var(--text); }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav id="sidebar">
+  <div id="sidebar-logo">
+    <div id="logo-monogram">MCS</div>
+    <span id="logo-name">Mega-Cap Scanner</span>
+  </div>
+  <div id="sidebar-search-wrap">
+    <span id="sidebar-search-icon">🔍</span>
+    <input id="sidebar-search" type="text" placeholder="Search tickers, regimes…" autocomplete="off">
+  </div>
+  <div id="nav-list">
+    <div class="nav-sep">MARKET</div>
+    <button class="nav-item active" data-page="scanner"><span class="nav-icon">📊</span>Scanner</button>
+    <div class="nav-sep">DATA</div>
+    <button class="nav-item" data-page="megacap"><span class="nav-icon">📈</span>Mega-Cap</button>
+    <button class="nav-item" data-page="dependents"><span class="nav-icon">📉</span>Dependents</button>
+    <div class="nav-sep">TOOLS</div>
+    <button class="nav-item" data-page="scheduler"><span class="nav-icon">⚙️</span>Scheduler</button>
+    <button class="nav-item" data-page="filings"><span class="nav-icon">📋</span>Filings</button>
+    <button class="nav-item" data-page="journal"><span class="nav-icon">📓</span>Journal</button>
+    <button class="nav-item" data-page="search"><span class="nav-icon">🔎</span>Search</button>
+  </div>
+  <div id="sidebar-bottom">
+    <button class="sb-btn" id="theme-toggle"><span class="nav-icon">🌙</span><span id="theme-label">Dark mode</span></button>
+    <button class="sb-btn" id="refresh-btn"><span class="nav-icon">↻</span>Refresh</button>
+    <div id="sb-last-updated"></div>
+  </div>
+</nav>
+
+<!-- Topbar -->
+<div id="topbar">
+  <div id="breadcrumb">Mega-Cap Scanner <span class="bc-sep">›</span><span class="bc-active" id="bc-view">Scanner</span></div>
+  <div id="topbar-right">
+    <div id="correction-badge">● CORRECTION ACTIVE</div>
+    <button id="capture-btn">📷 Capture snapshot</button>
+    <span id="topbar-ts"></span>
+  </div>
+</div>
+
+<!-- Main content -->
+<div id="main-content">
+
+  <!-- Always-visible: banner + summary + alert -->
+  <div id="always-visible">
+    <div id="banner-card"><span style="color:var(--dim)">Loading&hellip;</span></div>
+    <div id="signal-summary"></div>
+    <div id="correction-alert"></div>
+  </div>
+
+  <!-- Page views -->
+  <div id="pages-container">
+
+    <!-- SCANNER -->
+    <div class="page active" id="page-scanner">
+      <!-- Macro Observations -->
+      <div id="obs-section">
+        <div id="obs-header">
+          <span class="section-title">MACRO OBSERVATIONS</span>
+          <button id="obs-add-btn">+ Add observation</button>
+        </div>
+        <div id="obs-list"><div id="obs-empty" style="display:none">No observations in the last 7 days</div></div>
+      </div>
+      <div id="high-filings-section" style="margin-bottom:20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span class="section-title" style="font-size:12px;letter-spacing:0.08em;color:var(--muted);">RECENT HIGH-IMPACT FILINGS</span>
+          <button class="obs-link-btn" onclick="navigate('filings')" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">View all →</button>
+        </div>
+        <div id="high-filings-list"><div style="color:var(--muted);font-size:12px;font-style:italic;">Loading…</div></div>
+      </div>
+      <div class="section-header">
+        <span class="section-title">Mega-Cap Universe</span>
+        <span class="section-date" id="megacap-date"></span>
+      </div>
+      <div id="megacap-c-scanner"><div class="loading-overlay">Loading&hellip;</div></div>
+      <div class="section-header" style="margin-top:28px">
+        <span class="section-title">Dependent Scan</span>
+        <span class="section-date" id="scan-date"></span>
+      </div>
+      <div id="scan-c-scanner"><div class="loading-overlay">Loading&hellip;</div></div>
+    </div>
+
+    <!-- MEGA-CAP -->
+    <div class="page" id="page-megacap">
+      <div class="page-title">Mega-Cap Rankings</div>
+      <div class="page-sub" id="megacap-sub">—</div>
+      <div id="megacap-c-megacap"><div class="loading-overlay">Loading&hellip;</div></div>
+    </div>
+
+    <!-- DEPENDENTS -->
+    <div class="page" id="page-dependents">
+      <div class="page-title">Dependent Scan</div>
+      <div class="page-sub" id="scan-sub">—</div>
+      <div id="scan-c-dependents"><div class="loading-overlay">Loading&hellip;</div></div>
+    </div>
+
+    <!-- SCHEDULER -->
+    <div class="page" id="page-scheduler">
+      <div class="page-title">Scheduler</div>
+      <div class="page-sub">Automated data ingestion jobs</div>
+      <table class="sched-table">
+        <thead><tr><th>Job</th><th>Next Run</th><th>Last Run</th><th>Status</th><th></th></tr></thead>
+        <tbody id="sched-tbody"><tr><td colspan="5" style="color:var(--dim);padding:12px 14px;">Loading&hellip;</td></tr></tbody>
+      </table>
+      <div class="activity-log">
+        <div class="activity-log-header">
+          <span>Activity Log</span>
+          <span id="activity-log-count" style="font-weight:400;text-transform:none;letter-spacing:0"></span>
+        </div>
+        <div class="activity-log-body" id="activity-log-body">
+          <div class="log-empty">No activity yet</div>
+        </div>
+      </div>
+      <div style="margin-top:16px;border:1px solid var(--border);border-radius:4px;padding:12px 14px;">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">Filing Retention Policy</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;color:var(--muted);">
+          <thead><tr><th style="text-align:left;padding:2px 8px 4px 0;font-weight:600;">Impact</th><th style="text-align:left;padding:2px 8px 4px 0;font-weight:600;">Retention</th></tr></thead>
+          <tbody>
+            <tr><td style="padding:2px 8px 2px 0;">LOW</td><td style="padding:2px 0;">30 days</td></tr>
+            <tr><td style="padding:2px 8px 2px 0;">MEDIUM</td><td style="padding:2px 0;">90 days</td></tr>
+            <tr><td style="padding:2px 8px 2px 0;">HIGH</td><td style="padding:2px 0;">365 days</td></tr>
+            <tr><td style="padding:2px 8px 2px 0;">Journal-linked</td><td style="padding:2px 0;">Forever</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- FILINGS -->
+    <div class="page" id="page-filings">
+      <div class="page-title" style="border-left:2px solid var(--blue);padding-left:10px;">8-K Filings</div>
+      <div class="page-sub">Material SEC filings for the last 7 days</div>
+      <div id="filings-filter-bar">
+        <div id="filings-universe-btns">
+          <button class="f-uni-btn active" data-universe="all">All</button>
+          <button class="f-uni-btn" data-universe="megacap">Mega-caps</button>
+          <button class="f-uni-btn" data-universe="dependent">Dependents</button>
+        </div>
+        <input id="filings-search" type="text" placeholder="Search keyword…" autocomplete="off">
+      </div>
+      <div id="filings-content"><div class="loading-overlay">Loading&hellip;</div></div>
+    </div>
+
+    <!-- JOURNAL -->
+    <div class="page" id="page-journal">
+      <div class="page-title">Journal</div>
+      <div id="journal-perf"></div>
+      <div id="journal-controls">
+        <select id="journal-date-select"><option value="">All dates</option></select>
+        <span id="journal-count"></span>
+      </div>
+      <div id="journal-filters">
+        <button class="j-filter active" data-filter="all">All</button>
+        <button class="j-filter" data-filter="STRONG_BUY">STRONG_BUY</button>
+        <button class="j-filter" data-filter="BUY">BUY</button>
+        <button class="j-filter" data-filter="HOLD">HOLD</button>
+        <button class="j-filter" data-filter="SELL">SELL</button>
+        <button class="j-filter" data-filter="WAIT">WAIT</button>
+        <button class="j-filter" data-filter="MACRO">📎 Macro</button>
+        <button class="j-filter" data-filter="FILING">📎 8-K</button>
+      </div>
+      <div id="journal-c-journal"><div class="loading-overlay">Loading&hellip;</div></div>
+    </div>
+
+    <!-- SEARCH -->
+    <div class="page" id="page-search">
+      <div id="search-box-wrap">
+        <span id="search-main-icon">🔎</span>
+        <input id="search-main-input" type="text" placeholder="Search tickers, parents, regimes, actions…" autocomplete="off">
+      </div>
+      <div id="search-results-label">Type to search across all loaded data</div>
+      <div id="search-c-megacap"></div>
+      <div id="search-c-scan"></div>
+    </div>
+
+  </div><!-- /pages-container -->
+
+  <!-- Macro Observation Modal -->
+  <div id="obs-modal-overlay">
+    <div id="obs-modal">
+      <h3 id="obs-modal-title">Add Observation</h3>
+      <div class="obs-field">
+        <label>Date</label>
+        <input type="date" id="obs-f-date">
+      </div>
+      <div class="obs-field">
+        <label>Type</label>
+        <select id="obs-f-type">
+          <option value="8-K">8-K</option>
+          <option value="Earnings">Earnings</option>
+          <option value="News">News</option>
+          <option value="Thematic">Thematic</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="obs-field">
+        <label>Primary Ticker</label>
+        <select id="obs-f-primary"></select>
+      </div>
+      <div class="obs-field">
+        <label>Affected Dependents</label>
+        <div id="obs-dep-controls">
+          <button class="obs-dep-ctrl" id="obs-dep-all">Select all</button>
+          <button class="obs-dep-ctrl" id="obs-dep-none">Select none</button>
+        </div>
+        <div id="obs-affected-list"><span style="color:var(--muted);font-size:11px">Select a primary ticker first</span></div>
+      </div>
+      <div class="obs-field">
+        <label>Note <span style="font-size:10px;color:var(--muted)">(max 500 chars)</span></label>
+        <textarea id="obs-f-note" maxlength="500"></textarea>
+        <div id="obs-note-counter">0 / 500</div>
+      </div>
+      <div class="obs-field">
+        <label>Link (optional)</label>
+        <input type="url" id="obs-f-link" placeholder="https://…">
+      </div>
+      <div id="obs-modal-footer">
+        <button id="obs-save-btn">Save &amp; Link to Journal</button>
+        <button id="obs-cancel-btn">Cancel</button>
+        <span id="obs-modal-toast"></span>
+      </div>
+    </div>
+  </div>
+</div><!-- /main-content -->
+
+<!-- Tooltip -->
+<div class="ticker-tooltip" id="ticker-tooltip">
+  <div class="tooltip-company" id="tt-company"></div>
+  <div class="tooltip-line">Sector: <span id="tt-sector"></span></div>
+  <div class="tooltip-line">Mkt Cap: <span id="tt-mktcap"></span></div>
+  <div class="tooltip-line">52w H: <span id="tt-52h"></span> &middot; L: <span id="tt-52l"></span></div>
+</div>
+
+<script>
+/* ── Theme ────────────────────────────── */
+var html=document.documentElement;
+var currentTheme=localStorage.getItem('theme')||'dark';
+applyTheme(currentTheme);
+function applyTheme(t){
+  currentTheme=t;
+  html.setAttribute('data-theme',t);
+  document.getElementById('theme-toggle').querySelector('.nav-icon').textContent=t==='dark'?'🌙':'☀️';
+  document.getElementById('theme-label').textContent=t==='dark'?'Dark mode':'Light mode';
+  localStorage.setItem('theme',t);
+}
+document.getElementById('theme-toggle').addEventListener('click',function(){applyTheme(currentTheme==='dark'?'light':'dark');});
+
+/* ── Navigation ───────────────────────── */
+var currentPage='scanner';
+var PAGE_LABELS={scanner:'Scanner',megacap:'Mega-Cap',dependents:'Dependents',scheduler:'Scheduler',filings:'Filings',journal:'Journal',search:'Search'};
+
+function switchPage(page){
+  if(page===currentPage)return;
+  currentPage=page;
+  document.querySelectorAll('.nav-item').forEach(function(btn){
+    btn.classList.toggle('active',btn.dataset.page===page);
+  });
+  document.querySelectorAll('.page').forEach(function(el){
+    el.classList.toggle('active',el.id==='page-'+page);
+  });
+  document.getElementById('bc-view').textContent=PAGE_LABELS[page]||page;
+
+  if(page==='megacap'&&cachedMegacap){
+    renderMegacap(cachedMegacap,document.getElementById('megacap-c-megacap'));
+    var s=document.getElementById('megacap-sub');
+    if(s&&cachedMegacap.as_of)s.textContent='as of '+fmtDate(cachedMegacap.as_of);
+  }
+  if(page==='dependents'&&cachedScan){
+    renderScan(cachedScan,document.getElementById('scan-c-dependents'),'scan-sub');
+  }
+  if(page==='scheduler'&&cachedStatus){
+    renderScheduler(cachedStatus);
+  }
+  if(page==='filings'){
+    loadFilings();
+  }
+  if(page==='journal'&&cachedJournalDates.length){
+    renderJournalPage();
+  }
+  if(page==='search'){
+    document.getElementById('search-main-input').focus();
+  }
+}
+
+document.querySelectorAll('.nav-item').forEach(function(btn){
+  btn.addEventListener('click',function(){switchPage(btn.dataset.page);});
+});
+
+document.getElementById('sidebar-search').addEventListener('input',function(){
+  var q=this.value.trim();
+  switchPage('search');
+  document.getElementById('search-main-input').value=q;
+  filterSearch(q);
+});
+
+/* ── Cached data ──────────────────────── */
+var cachedMegacap=null,cachedScan=null,cachedStatus=null;
+var cachedJournalDates=[],cachedJournalRows={},journalFilter='all';
+var MACRO_TYPES=['8-K','Earnings','News','Thematic','Other'];
+var MACRO_RE=new RegExp('\\[('+MACRO_TYPES.join('|')+')\\]');
+var FILING_RE=/\[8-K: [^\]]+\]/;
+
+/* ── Tooltip ──────────────────────────── */
+var tooltip=document.getElementById('ticker-tooltip');
+var ttCompany=document.getElementById('tt-company'),ttSector=document.getElementById('tt-sector');
+var ttMktcap=document.getElementById('tt-mktcap'),tt52h=document.getElementById('tt-52h'),tt52l=document.getElementById('tt-52l');
+var tickerCache={},tooltipTimer=null;
+function showTooltip(e,sym){
+  clearTimeout(tooltipTimer);
+  tooltipTimer=setTimeout(async function(){
+    var d=tickerCache[sym];
+    if(!d){try{var r=await fetch('/api/ticker/'+sym);if(!r.ok)return;d=await r.json();tickerCache[sym]=d;}catch(err){console.error('tt:',err);return;}}
+    ttCompany.textContent=d.company||sym;ttSector.textContent=d.sector||'—';
+    ttMktcap.textContent=d.market_cap?fmtMktCap(d.market_cap):'—';
+    tt52h.textContent=d.week52_high?fmt2(d.week52_high):'—';tt52l.textContent=d.week52_low?fmt2(d.week52_low):'—';
+    positionTooltip(e);tooltip.classList.add('visible');
+  },300);
+}
+function positionTooltip(e){var x=e.clientX+14,y=e.clientY-10,tw=220;tooltip.style.left=(x+tw>window.innerWidth?x-tw-28:x)+'px';tooltip.style.top=Math.min(y,window.innerHeight-140)+'px';}
+function hideTooltip(){clearTimeout(tooltipTimer);tooltip.classList.remove('visible');}
+document.addEventListener('mousemove',function(e){if(tooltip.classList.contains('visible'))positionTooltip(e);});
+function attachTickerEvents(el,sym){
+  el.addEventListener('mouseenter',function(e){showTooltip(e,sym);});
+  el.addEventListener('mouseleave',hideTooltip);
+  el.addEventListener('click',function(){window.open('https://finance.yahoo.com/quote/'+sym,'_blank');});
+}
+
+/* ── Formatters ───────────────────────── */
+function fmt2(v){if(v==null||isNaN(v))return'—';return Number(v).toFixed(2);}
+function fmtPct(v){if(v==null||isNaN(v))return'—';return(v>0?'+':'')+Number(v).toFixed(2)+'%';}
+function fmtScore(v){if(v==null||isNaN(v))return'—';return Number(v).toFixed(3);}
+function fmtMktCap(v){if(!v)return'—';if(v>=1e12)return'$'+(v/1e12).toFixed(2)+'T';if(v>=1e9)return'$'+(v/1e9).toFixed(1)+'B';return'$'+(v/1e6).toFixed(0)+'M';}
+function fmtDate(s){if(!s)return'';return String(s).slice(0,10);}
+function fmtRvol(v){if(v==null||isNaN(v))return'—';return Number(v).toFixed(2)+'x';}
+function fmtDec(v,d){if(v==null||isNaN(v))return'—';return(Number(v)>=0?'+':'')+Number(v).toFixed(d);}
+function fmtHistPct(v){if(v==null||isNaN(v))return'—';return Number(v*100).toFixed(0)+'%';}
+function valClass(v){if(v==null||isNaN(v))return'val-zero';if(v>0)return'val-pos';if(v<0)return'val-neg';return'val-zero';}
+function confClass(v,max){if(v==null)return'conf-low';var r=max>0?v/max:0;if(r>=0.7)return'conf-high';if(r>=0.4)return'conf-mid';return'conf-low';}
+function rvolClass(v){if(v==null||isNaN(v))return'rvol-low';return Number(v)>=1.5?'rvol-high':'rvol-low';}
+function regimeClass(regime){if(!regime)return'';var r=regime.toUpperCase();if(r.includes('CORRECTION'))return'regime-correction';if(r.includes('PULLBACK'))return'regime-pullback';if(r.includes('UP'))return'regime-up';if(r.includes('DRAWDOWN'))return'regime-drawdown';return'';}
+function labelPill(label){if(!label)return'';var l=label.toUpperCase();if(l==='LEADING')return'<span class="pill pill-leading">LEADING</span>';if(l==='NEUTRAL')return'<span class="pill pill-neutral">NEUTRAL</span>';if(l==='WEAKENING')return'<span class="pill pill-weakening">WEAKENING</span>';return'<span class="pill" style="border:1px solid var(--dim);color:var(--dim)">'+label+'</span>';}
+function actionClass(a){if(!a)return'action-wait';var u=a.toUpperCase();if(u.includes('WAIT')&&u.includes('UNVALIDATED'))return'action-wait-unvalidated';if(u==='STRONG_BUY')return'action-strong-buy';if(u==='BUY')return'action-buy';if(u==='SELL')return'action-sell';if(u==='HOLD')return'action-hold';return'action-wait';}
+function insiderClass(ins){if(!ins)return'ins-none';var s=String(ins);if(s.includes('!')||s.toLowerCase().includes('sell'))return'ins-selling';if(s.includes('+'))return'ins-buy';return'ins-none';}
+function earningsLabel(days){if(days==null||days>14)return'';if(days===0)return'EARNINGS TODAY';if(days<=2)return'EARNINGS TOMORROW';return'EARNINGS '+days+'d';}
+function earningsStyle(days){if(days==null||days>14)return'';if(days<=2)return'color:var(--red);font-weight:700';if(days<=7)return'color:var(--orange);font-weight:600';return'color:var(--yellow)';}
+
+/* ── Table helpers ────────────────────── */
+function buildColgroup(W){return W.map(function(w){return'<col style="width:'+w+'px;min-width:'+w+'px;max-width:'+w+'px">';}).join('');}
+function buildThead(L,A,W){return'<thead><tr>'+L.map(function(l,i){return'<th class="'+A[i]+'" style="width:'+W[i]+'px">'+l+'</th>';}).join('')+'</tr></thead>';}
+function dotHtml(s){var u=(s||'').toLowerCase(),c='dot-idle';if(u==='ok'||u==='success')c='dot-ok';else if(u==='running')c='dot-running';else if(u==='error')c='dot-error';return'<span class="status-dot '+c+'"></span>'+(s||'idle');}
+
+/* ── Banner ───────────────────────────── */
+async function loadBanner(){
+  try{var r=await fetch('/api/rotation');if(!r.ok)throw new Error(r.statusText);renderBanner(await r.json());}
+  catch(err){console.error('banner:',err);document.getElementById('banner-card').innerHTML='<span style="color:var(--red)">Rotation data unavailable</span>';}
+}
+function vixCC(l){if(!l)return'color-neutral';var u=l.toUpperCase();if(u.includes('CALM'))return'color-vix-calm';if(u.includes('FEAR')||u.includes('HIGH'))return'color-vix-fear';return'color-vix-elevated';}
+function rotCC(s){if(!s)return'color-neutral';var u=s.toUpperCase();if(u==='LEADING')return'color-leading';if(u==='LAGGING')return'color-lagging';return'color-neutral';}
+function renderBanner(d){
+  var el=document.getElementById('banner-card'),parts=[];
+  if(d.xlk_status)parts.push('<span class="banner-label">XLK:</span><span class="'+rotCC(d.xlk_status)+'">'+d.xlk_status+'</span>');
+  if(d.vix_label)parts.push('<span class="banner-label">VIX:</span><span class="'+vixCC(d.vix_label)+'">'+(d.vix_level!=null?d.vix_level.toFixed(1)+' ':'')+d.vix_label+'</span>');
+  if(d.spy_20d!=null)parts.push('<span class="banner-label">SPY 20d:</span><span class="'+valClass(d.spy_20d)+'">'+fmtPct(d.spy_20d*100)+'</span>');
+  if(d.xlk_vs_spy!=null)parts.push('<span class="banner-label">XLK vs SPY:</span><span class="'+valClass(d.xlk_vs_spy)+'">'+fmtPct(d.xlk_vs_spy*100)+'</span>');
+  if(d.as_of)parts.push('<span style="color:var(--dim)">as of '+fmtDate(d.as_of)+'</span>');
+  el.innerHTML=parts.length?parts.join('<span class="banner-sep">&middot;</span>'):'<span style="color:var(--dim)">No rotation data</span>';
+}
+
+/* ── Signal summary + correction alert ── */
+function updateSummary(scanData){
+  if(!scanData||!scanData.groups)return;
+  var corrections=[],buys=0,clusters=0,totalRows=0;
+  scanData.groups.forEach(function(grp){
+    var regime=(grp.parent_regime||'').toUpperCase();
+    if(grp.is_validated&&regime.includes('CORRECTION'))corrections.push(grp.parent);
+    (grp.rows||[]).forEach(function(row){
+      totalRows++;
+      var a=(row.action_label||'').toUpperCase();
+      if(a==='BUY'||a==='STRONG_BUY')buys++;
+      if((row.insider_annotation||'').toLowerCase()==='cluster')clusters++;
+    });
+  });
+
+  var chips=[
+    {val:corrections.length,label:'Corrections',cls:corrections.length>0?'sig-yellow':''},
+    {val:buys,label:'Buy signals',cls:buys>0?'sig-green':''},
+    {val:clusters,label:'Cluster buys',cls:clusters>0?'sig-blue':''},
+    {val:scanData.groups.length,label:'Parents',cls:''},
+  ];
+  document.getElementById('signal-summary').innerHTML=chips.map(function(c){
+    return'<div class="sig-chip '+c.cls+'"><span class="chip-val">'+c.val+'</span> '+c.label+'</div>';
+  }).join('');
+
+  var alertEl=document.getElementById('correction-alert');
+  var badge=document.getElementById('correction-badge');
+  if(corrections.length>0){
+    alertEl.innerHTML='<strong>&#9888; CORRECTION REGIME</strong> &nbsp;'+corrections.join(', ')+' &mdash; RS signals active in tradeable regime';
+    alertEl.style.display='block';
+    badge.style.display='inline-block';
+  }else{
+    alertEl.style.display='none';
+    badge.style.display='none';
+  }
+}
+
+/* ── Scheduler ────────────────────────── */
+async function loadScheduler(){
+  try{var r=await fetch('/api/status');if(!r.ok)throw new Error(r.statusText);cachedStatus=await r.json();renderScheduler(cachedStatus);
+    var lu=cachedStatus.last_updated;
+    if(lu){var ts=fmtDate(lu);document.getElementById('sb-last-updated').textContent='Updated '+ts;document.getElementById('topbar-ts').textContent=ts;}
+  }catch(err){console.error('sched:',err);document.getElementById('sched-tbody').innerHTML='<tr><td colspan="5" style="color:var(--red);padding:12px 14px;">Failed to load</td></tr>';}
+  loadActivityLog();
+}
+
+async function loadActivityLog(){
+  try{
+    var r=await fetch('/api/activity-log');
+    if(!r.ok)throw new Error(r.statusText);
+    var d=await r.json();
+    renderActivityLog(d.entries||[]);
+  }catch(err){
+    console.error('activity-log:',err);
+    document.getElementById('activity-log-body').innerHTML='<div class="log-empty" style="color:var(--red)">Failed to load</div>';
+  }
+}
+
+function renderActivityLog(entries){
+  var body=document.getElementById('activity-log-body');
+  var countEl=document.getElementById('activity-log-count');
+  if(!entries.length){
+    body.innerHTML='<div class="log-empty">No activity yet — run a job to see entries here</div>';
+    if(countEl)countEl.textContent='';
+    return;
+  }
+  if(countEl)countEl.textContent=entries.length+' entries';
+  body.innerHTML=entries.map(function(e){
+    var ts=e.logged_at?String(e.logged_at).replace('T',' ').slice(0,19)+' UTC':'—';
+    var dotCls=e.status==='success'?'log-dot-ok':'log-dot-err';
+    var dotChar=e.status==='success'?'●':'✕';
+    return'<div class="activity-log-entry">'
+      +'<span class="log-ts">'+ts+'</span>'
+      +'<span class="log-job">'+e.job_name+'</span>'
+      +'<span class="'+dotCls+'">'+dotChar+'</span>'
+      +'<span class="log-msg">'+e.message+'</span>'
+      +'</div>';
+  }).join('');
+}
+var _JOB_ENDPOINTS={'ingest':'/api/run/ingest','ingest-estimates':'/api/run/ingest-estimates','ingest-insiders':'/api/run/ingest-insiders','ingest-earnings':'/api/run/ingest-earnings','ingest-filings':'/api/run/ingest-filings','cleanup-filings':'/api/run/cleanup-filings'};
+function renderScheduler(data){
+  var tbody=document.getElementById('sched-tbody'),jobs=data.jobs||data;
+  if(!Array.isArray(jobs)||!jobs.length){tbody.innerHTML='<tr><td colspan="5" style="color:var(--dim);padding:12px 14px;">No jobs configured</td></tr>';return;}
+  tbody.innerHTML=jobs.map(function(j){
+    var name=j.name||j.id||'—',nr=j.next_run_time||'—',lr=j.last_run_time||'—';
+    var ep=_JOB_ENDPOINTS[name];
+    var btn=ep?'<button class="run-btn" data-ep="'+ep+'">Run now</button>':'';
+    return'<tr><td style="text-align:left">'+name+'</td><td>'+nr+'</td><td>'+lr+'</td><td style="text-align:left">'+dotHtml(j.last_run_status)+'</td><td>'+btn+'</td></tr>';
+  }).join('');
+  tbody.querySelectorAll('.run-btn').forEach(function(btn){
+    btn.addEventListener('click',async function(){
+      btn.disabled=true;btn.textContent='…';
+      try{var r=await fetch(btn.dataset.ep,{method:'POST'});var d=await r.json();
+        if(d.status==='success'){btn.textContent='✓';btn.classList.add('run-ok');}
+        else{btn.textContent='✗';btn.classList.add('run-fail');console.error('run job failed:',d);}
+      }catch(err){btn.textContent='✗';btn.classList.add('run-fail');console.error('run job error:',err);}
+      setTimeout(function(){btn.disabled=false;btn.textContent='Run now';btn.classList.remove('run-ok','run-fail');},3000);
+    });
+  });
+}
+
+/* ── Mega-Cap ─────────────────────────── */
+async function loadMegacap(){
+  try{var r=await fetch('/api/scan-megacap');if(!r.ok)throw new Error(r.statusText);cachedMegacap=await r.json();
+    renderMegacap(cachedMegacap,document.getElementById('megacap-c-scanner'));
+    if(currentPage==='megacap')renderMegacap(cachedMegacap,document.getElementById('megacap-c-megacap'));
+    var asOf=cachedMegacap.as_of||'';
+    if(asOf){document.getElementById('megacap-date').textContent=fmtDate(asOf);document.getElementById('megacap-sub').textContent='as of '+fmtDate(asOf);}
+  }catch(err){console.error('megacap:',err);document.getElementById('megacap-c-scanner').innerHTML='<div class="error-overlay">Failed to load mega-cap data: '+err.message+'</div>';}
+}
+function renderMegacap(data,c){
+  if(!c)return;
+  var rows=Array.isArray(data)?data:(data.rankings||[]);
+  if(!rows.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No data available</div>';return;}
+  var W=[48,80,88,72,72,72,56,72,72,80,72,72,64,104,120];
+  var L=['#','Ticker','Price','RS-20','RS-60','RS-120','Trend','Vol Conv','Est Rev','RVOL','Confirm','Hist %','Score','Label','Earnings'];
+  var A=['left','left','','','','','','','','','','','','','left'];
+  var cid=c.id||'mc';
+  var tb=rows.map(function(row,i){
+    var tk=row.ticker||'',rank=row.rank!=null?row.rank:i+1;
+    var rs20v=row.rs_20!=null?row.rs_20:(row.rs20!=null?row.rs20:null);
+    var rs60v=row.rs_60!=null?row.rs_60:(row.rs60!=null?row.rs60:null);
+    var rs120v=row.rs_120!=null?row.rs_120:(row.rs120!=null?row.rs120:null);
+    var trendv=row.trend!=null?row.trend:null;
+    var trendRaw=row.trend_raw!=null?row.trend_raw:null;
+    var vcv=row.vol_conviction!=null?row.vol_conviction:null;
+    var erv=row.est_rev!=null?row.est_rev:(row.estimate_revision!=null?row.estimate_revision:null);
+    var rvN=row.rvol!=null?row.rvol:(row.relative_volume!=null?row.relative_volume:null);
+    var cfN=row.confirm!=null?row.confirm:(row.confirmation_score!=null?row.confirmation_score:null);
+    var cfMax=row.confirm_max!=null?row.confirm_max:5;
+    var hpv=row.hist_pct!=null?row.hist_pct:(row.historical_pct!=null?row.historical_pct:null);
+    var sN=row.score!=null?row.score:null;
+    var label=row.label||row.action||'';
+    var hl=row.headlines||row.news||[];
+    var cfH=cfN!=null?'<span class="'+confClass(cfN,cfMax)+'">'+cfN+'/'+cfMax+'</span>':'<span class="conf-low">—</span>';
+    var eid=cid+'-x-'+i;
+    var expBtn=hl.length?'<button class="expand-btn" data-expand="'+eid+'">&#9660;</button>':'';
+    var expRow=hl.length?'<tr class="expand-row" id="'+eid+'" style="display:none"><td colspan="'+W.length+'"><ul class="headlines-list">'+hl.map(function(h){return'<li class="headline-item">'+h+'<span class="context-tag">[CONTEXT ONLY]</span></li>';}).join('')+'</ul></td></tr>':'';
+    var earnDays=row.earnings_days!=null?row.earnings_days:null;
+    var earnLbl=earningsLabel(earnDays);
+    var earnSty=earningsStyle(earnDays);
+    var earnH=earnLbl?'<span style="'+earnSty+'">'+earnLbl+'</span>':'<span style="color:var(--dim)">—</span>';
+    return'<tr><td class="left">'+expBtn+rank+'</td>'
+      +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
+      +'<td>'+fmt2(row.price)+'</td>'
+      +'<td class="'+valClass(rs20v)+'">'+(rs20v!=null?fmtPct(rs20v*100):'—')+'</td>'
+      +'<td class="'+valClass(rs60v)+'">'+(rs60v!=null?fmtPct(rs60v*100):'—')+'</td>'
+      +'<td class="'+valClass(rs120v)+'">'+(rs120v!=null?fmtPct(rs120v*100):'—')+'</td>'
+      +'<td class="'+valClass(trendv)+'">'+(trendRaw!=null?trendRaw+'/2':'—')+'</td>'
+      +'<td class="'+valClass(vcv)+'">'+(vcv!=null?fmtPct(vcv*100):'—')+'</td>'
+      +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
+      +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
+      +'<td>'+cfH+'</td>'
+      +'<td>'+(hpv!=null?fmtHistPct(hpv):'—')+'</td>'
+      +'<td class="'+valClass(sN)+'">'+(sN!=null?fmtScore(sN):'—')+'</td>'
+      +'<td>'+labelPill(label)+'</td>'
+      +'<td class="left">'+earnH+'</td></tr>'+expRow;
+  }).join('');
+  c.innerHTML='<table class="data-table"><colgroup>'+buildColgroup(W)+'</colgroup>'+buildThead(L,A,W)+'<tbody>'+tb+'</tbody></table>';
+  c.querySelectorAll('.ticker-cell').forEach(function(el){attachTickerEvents(el,el.dataset.symbol);});
+  c.querySelectorAll('.expand-btn').forEach(function(btn){
+    btn.addEventListener('click',function(e){e.stopPropagation();var row=document.getElementById(btn.dataset.expand);if(!row)return;var h=row.style.display==='none';row.style.display=h?'':'none';btn.innerHTML=h?'&#9650;':'&#9660;';});
+  });
+}
+
+/* ── Dependent Scan ───────────────────── */
+async function loadScan(){
+  try{var r=await fetch('/api/scan');if(!r.ok)throw new Error(r.statusText);cachedScan=await r.json();
+    renderScan(cachedScan,document.getElementById('scan-c-scanner'),'scan-date',false);
+    if(currentPage==='dependents')renderScan(cachedScan,document.getElementById('scan-c-dependents'),'scan-sub',true);
+    updateSummary(cachedScan);
+  }catch(err){console.error('scan:',err);document.getElementById('scan-c-scanner').innerHTML='<div class="error-overlay">Failed to load scan data: '+err.message+'</div>';}
+}
+function renderScan(data,c,dateElId,subStyle){
+  if(!c)return;
+  var groups=Array.isArray(data)?[]:(data.groups||[]);
+  var asOf=data.as_of||'';
+  if(asOf&&dateElId){var de=document.getElementById(dateElId);if(de)de.textContent=subStyle?'as of '+fmtDate(asOf):fmtDate(asOf);}
+  if(!groups.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No scan results</div>';return;}
+  var W=[48,80,72,88,88,160,72,80,72,128,120];
+  var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','Insiders','Earnings'];
+  var A=['left','left','left','','','left','','','','left','left'];
+  var tb=groups.map(function(grp){
+    var parent=grp.parent||'OTHER',regime=grp.parent_regime||'';
+    var ret20d=grp.parent_20d_return!=null?grp.parent_20d_return:null;
+    var rStr=regime?'<span class="'+regimeClass(regime)+'">'+regime+'</span>':'';
+    var retStr=ret20d!=null?'(20d: '+fmtPct(ret20d*100)+')':'';
+    var gHdr='<tr class="parent-group-header"><td colspan="'+W.length+'"><strong>'+parent+'</strong> '+rStr+' '+retStr+'</td></tr>';
+    var dRows=(grp.rows||[]).map(function(row){
+      var tk=row.ticker||'',par=row.parent||'';
+      var rsN=row.rs_score!=null?parseFloat(row.rs_score):null;
+      var erv=row.est_rev!=null?row.est_rev:null;
+      var rvN=row.rvol!=null?row.rvol:null;
+      var cfN=row.confirm!=null?row.confirm:null;
+      var cfMax=row.confirm_max!=null?row.confirm_max:5;
+      var ins=row.insider_annotation||'',action=row.action_label||'';
+      var cfH=cfN!=null?'<span class="'+confClass(cfN,cfMax)+'">'+cfN+'/'+cfMax+'</span>':'<span class="conf-low">—</span>';
+      var insH=ins?'<span class="'+insiderClass(ins)+'">'+ins+'</span>':'<span class="ins-none">—</span>';
+      var earnDays=row.earnings_days!=null?row.earnings_days:null;
+      var earnLbl=earningsLabel(earnDays);
+      var earnSty=earningsStyle(earnDays);
+      var earnH=earnLbl?'<span style="'+earnSty+'">'+earnLbl+'</span>':'<span style="color:var(--dim)">—</span>';
+      return'<tr><td class="left" style="color:var(--muted)">'+(row.rank!=null?row.rank:'—')+'</td>'
+        +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
+        +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
+        +'<td>'+fmt2(row.price)+'</td>'
+        +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+'</td>'
+        +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span></td>'
+        +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
+        +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
+        +'<td>'+cfH+'</td>'
+        +'<td class="left">'+insH+'</td>'
+        +'<td class="left">'+earnH+'</td></tr>';
+    }).join('');
+    return gHdr+dRows;
+  }).join('');
+  c.innerHTML='<table class="data-table"><colgroup>'+buildColgroup(W)+'</colgroup>'+buildThead(L,A,W)+'<tbody>'+tb+'</tbody></table>';
+  c.querySelectorAll('.ticker-cell').forEach(function(el){attachTickerEvents(el,el.dataset.symbol);});
+}
+
+/* ── Journal ──────────────────────────── */
+async function loadJournal(){
+  try{
+    var r=await fetch('/api/journal/dates');
+    if(!r.ok)throw new Error(r.statusText);
+    var data=await r.json();
+    cachedJournalDates=data.dates||[];
+    if(currentPage==='journal')renderJournalPage();
+  }catch(err){console.error('journal dates:',err);document.getElementById('journal-c-journal').innerHTML='<div class="error-overlay">Failed to load journal: '+err.message+'</div>';}
+  fetch('/api/journal/performance').then(function(r){return r.ok?r.json():null;}).then(function(data){if(data)renderPerfCards(data);}).catch(function(e){console.error('journal perf:',e);});
+}
+async function loadJournalForDate(d){
+  if(cachedJournalRows[d])return cachedJournalRows[d];
+  try{
+    var r=await fetch('/api/journal/'+encodeURIComponent(d));
+    if(!r.ok)throw new Error(r.statusText);
+    var data=await r.json();
+    cachedJournalRows[d]=data.entries||[];
+    return cachedJournalRows[d];
+  }catch(err){console.error('journal rows:',err);return[];}
+}
+function renderJournalPage(){
+  journalFilter='all';
+  document.querySelectorAll('.j-filter').forEach(function(b){b.classList.toggle('active',b.dataset.filter==='all');});
+  var sel=document.getElementById('journal-date-select');
+  var prevVal=sel.value;
+  sel.innerHTML=cachedJournalDates.map(function(d){return'<option value="'+d+'">'+d+'</option>';}).join('');
+  if(prevVal&&cachedJournalDates.indexOf(prevVal)>=0)sel.value=prevVal;
+  else if(cachedJournalDates.length)sel.value=cachedJournalDates[0];
+  var chosen=sel.value;
+  if(chosen){
+    loadJournalForDate(chosen).then(function(rows){renderJournalRows(rows,chosen);});
+  }
+  sel.onchange=function(){
+    var d=sel.value;
+    if(!d)return;
+    journalFilter='all';
+    document.querySelectorAll('.j-filter').forEach(function(b){b.classList.toggle('active',b.dataset.filter==='all');});
+    document.getElementById('journal-c-journal').innerHTML='<div class="loading-overlay">Loading…</div>';
+    loadJournalForDate(d).then(function(rows){renderJournalRows(rows,d);});
+  };
+}
+function renderPerfCards(data){
+  var perf=document.getElementById('journal-perf');
+  if(!perf)return;
+  var buckets=data.buckets||{};
+  var labels=['STRONG_BUY','BUY'];
+  var cards=labels.map(function(lbl){
+    var b=buckets[lbl];
+    if(!b||!b.count)return'';
+    var fmtPctCard=function(v){if(v==null)return'<span style="color:var(--dim)">—</span>';var s=(v*100).toFixed(1)+'%';return'<span style="color:'+(v>=0?'var(--green)':'var(--red)')+'">'+s+'</span>';};
+    var hrStr=b.hit_rate_10d!=null?Math.round(b.hit_rate_10d*100)+'%':'—';
+    var hasReturns=b.n_with_returns>0;
+    return'<div class="j-perf-card">'
+      +'<span class="j-perf-label '+actionClass(lbl)+'">'+lbl+'</span>'
+      +'<div class="j-perf-stat"><span class="j-perf-num">'+b.count+'</span><span class="j-perf-sub">signals</span></div>'
+      +(hasReturns
+        ?'<div class="j-perf-stat"><span class="j-perf-num">'+fmtPctCard(b.avg_5d)+'</span><span class="j-perf-sub">avg 5d</span></div>'
+         +'<div class="j-perf-stat"><span class="j-perf-num">'+fmtPctCard(b.avg_10d)+'</span><span class="j-perf-sub">avg 10d</span></div>'
+         +'<div class="j-perf-stat"><span class="j-perf-num">'+hrStr+'</span><span class="j-perf-sub">hit rate</span></div>'
+        :'<div class="j-perf-stat"><span class="j-perf-num" style="color:var(--muted);font-size:11px">Accumulating data…</span></div>')
+      +'</div>';
+  }).filter(Boolean).join('');
+  perf.innerHTML=cards?'<div id="journal-perf-inner">'+cards+'</div>':'';
+}
+async function applyFilter(f){
+  journalFilter=f;
+  document.querySelectorAll('.j-filter').forEach(function(b){b.classList.toggle('active',b.dataset.filter===f);});
+  if(f==='all'){
+    var sel=document.getElementById('journal-date-select');
+    var d=sel.value;
+    if(d){
+      document.getElementById('journal-c-journal').innerHTML='<div class="loading-overlay">Loading…</div>';
+      loadJournalForDate(d).then(function(rows){renderJournalRows(rows,d);});
+    }
+    return;
+  }
+  document.getElementById('journal-c-journal').innerHTML='<div class="loading-overlay">Loading…</div>';
+  try{
+    var allRows=await Promise.all(cachedJournalDates.map(loadJournalForDate));
+    var flat=[].concat.apply([],allRows);
+    var filtered=flat.filter(function(row){
+      var n=row.notes||'';
+      if(f==='MACRO')return MACRO_RE.test(n);
+      if(f==='FILING')return FILING_RE.test(n);
+      var al=(row.action_label||'').toUpperCase();
+      if(f==='WAIT')return al==='WAIT'||al.indexOf('WAIT -')===0;
+      return al===f;
+    });
+    renderJournalRows(filtered,'');
+  }catch(err){console.error('applyFilter:',err);}
+}
+document.querySelectorAll('.j-filter').forEach(function(btn){
+  btn.addEventListener('click',function(){applyFilter(btn.dataset.filter);});
+});
+function renderJournalRows(rows,dateLabel){
+  var c=document.getElementById('journal-c-journal');
+  var cnt=document.getElementById('journal-count');
+  if(cnt)cnt.textContent=rows.length+' entries'+(dateLabel?' for '+dateLabel:'');
+  if(!rows.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No journal entries</div>';return;}
+  var W=[100,68,68,80,72,148,76,66,68,68,90,96,68,72,72,72,24,200];
+  var L=['Date','Ticker','Parent','Price','Rank','Action','RS Score','Est Rev','RVOL','Confirm','Insiders','Earnings','P.20D','5D Rtn','10D Rtn','20D Rtn','','Notes'];
+  var A=['left','left','left','','','left','','','','','left','left','','','','','','left'];
+  var fmtFwd=function(v){
+    if(v==null)return'<span style="color:var(--dim)">—</span>';
+    var pct=(v*100).toFixed(1)+'%';
+    return'<span class="'+(v>=0?'val-pos':'val-neg')+'">'+(v>=0?'+':'')+pct+'</span>';
+  };
+  var tb=rows.map(function(row){
+    var tk=row.ticker||'',par=row.parent||'';
+    var rsN=row.rs_score!=null?parseFloat(row.rs_score):null;
+    var erv=row.est_rev!=null?parseFloat(row.est_rev):null;
+    var rvol=row.rvol!=null?parseFloat(row.rvol):null;
+    var conf=row.confirm!=null?parseInt(row.confirm):null;
+    var ins=row.insider_annotation||'';
+    var edays=row.earnings_days!=null?parseInt(row.earnings_days):null;
+    var p20d=row.parent_20d_return!=null?parseFloat(row.parent_20d_return):null;
+    var action=row.action_label||'';
+    var notes=row.notes||'';
+    var eLabel=earningsLabel(edays);
+    var eStyle=earningsStyle(edays);
+    var p20dCell=p20d!=null?((p20d*100).toFixed(1)+'%'):'—';
+    var p20dCls=p20d!=null?(p20d>=0?'pos':'neg'):'';
+    var hasNotes=notes.length>0;
+    var isMacroLinked=MACRO_RE.test(notes);
+    var isFilingLinked=FILING_RE.test(notes);
+    var macroBadgeTd='<td style="text-align:center">'
+      +(isMacroLinked?'<span class="j-macro-badge" title="Linked from macro observation">📎</span>':'')
+      +(isFilingLinked?'<span class="j-filing-badge" title="Linked from 8-K filing">📎 8-K</span>':'')
+      +'</td>';
+    var notesTd='<td class="left" contenteditable="true"'
+      +' data-scan-date="'+row.scan_date+'" data-ticker="'+tk+'" data-parent="'+par+'"'
+      +' data-has-notes="'+(hasNotes?'true':'false')+'"'
+      +' style="font-style:italic;cursor:text;outline:none;'+(hasNotes?'color:var(--muted)':'color:var(--dim)')+'">'+
+      (hasNotes?escHtml(notes):'＋ add note')+'</td>';
+    return'<tr>'
+      +'<td class="left" style="color:var(--muted)">'+fmtDate(row.scan_date)+'</td>'
+      +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
+      +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
+      +'<td>'+(row.price!=null?fmt2(row.price):'—')+'</td>'
+      +'<td style="color:var(--muted)">'+(row.rank||'—')+'</td>'
+      +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span></td>'
+      +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+'</td>'
+      +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
+      +'<td class="'+rvolClass(rvol)+'">'+(rvol!=null?fmtRvol(rvol):'—')+'</td>'
+      +'<td class="'+confClass(conf,erv!=null?5:4)+'">'+(conf!=null?conf+'/'+(erv!=null?5:4):'—')+'</td>'
+      +'<td class="left '+insiderClass(ins)+'">'+(ins||'—')+'</td>'
+      +'<td class="left">'+(eLabel?'<span style="'+eStyle+'">'+eLabel+'</span>':'—')+'</td>'
+      +'<td class="'+p20dCls+'">'+(p20d!=null?p20dCell:'—')+'</td>'
+      +'<td>'+fmtFwd(row.fwd_5d!=null?parseFloat(row.fwd_5d):null)+'</td>'
+      +'<td>'+fmtFwd(row.fwd_10d!=null?parseFloat(row.fwd_10d):null)+'</td>'
+      +'<td>'+fmtFwd(row.fwd_20d!=null?parseFloat(row.fwd_20d):null)+'</td>'
+      +macroBadgeTd
+      +notesTd
+      +'</tr>';
+  }).join('');
+  c.innerHTML='<table class="data-table"><colgroup>'+buildColgroup(W)+'</colgroup>'+buildThead(L,A,W)+'<tbody>'+tb+'</tbody></table>';
+  c.querySelectorAll('.ticker-cell').forEach(function(el){attachTickerEvents(el,el.dataset.symbol);});
+  c.querySelectorAll('td[contenteditable]').forEach(function(td){
+    var origNotes=td.dataset.hasNotes==='true'?td.textContent:'';
+    td.addEventListener('focus',function(){
+      if(td.dataset.hasNotes==='false'){td.textContent='';td.style.color='var(--muted)';}
+    });
+    td.addEventListener('keydown',function(e){
+      if(e.key==='Enter'){e.preventDefault();td.blur();}
+    });
+    td.addEventListener('blur',async function(){
+      var sd=td.dataset.scanDate,tk=td.dataset.ticker,par=td.dataset.parent;
+      var cur=td.textContent||'';
+      if(cur===''){
+        td.textContent='＋ add note';td.style.color='var(--dim)';
+        td.dataset.hasNotes='false';
+        cur='';
+      }
+      if(cur===origNotes)return;
+      var saveVal=cur==='＋ add note'?'':cur;
+      try{
+        var r=await fetch('/api/journal/'+encodeURIComponent(sd)+'/'+encodeURIComponent(tk)+'/'+encodeURIComponent(par)+'/notes',
+          {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:saveVal})});
+        if(!r.ok){console.error('notes save failed:',r.statusText);return;}
+        origNotes=cur;
+        td.dataset.hasNotes=saveVal?'true':'false';
+        if(cachedJournalRows[sd]){
+          var entry=cachedJournalRows[sd].find(function(e){return e.ticker===tk&&e.parent===par;});
+          if(entry)entry.notes=saveVal;
+        }
+        td.classList.add('j-saved');
+        setTimeout(function(){td.classList.remove('j-saved');},800);
+      }catch(err){console.error('notes save:',err);}
+    });
+  });
+}
+function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+/* ── Search ───────────────────────────── */
+document.getElementById('search-main-input').addEventListener('input',function(){filterSearch(this.value.trim());});
+
+function filterSearch(q){
+  var label=document.getElementById('search-results-label');
+  var mc=document.getElementById('search-c-megacap');
+  var sc=document.getElementById('search-c-scan');
+  if(!q){label.textContent='Type to search across all loaded data';mc.innerHTML='';sc.innerHTML='';return;}
+  var lq=q.toLowerCase();
+
+  var mcRows=[];
+  if(cachedMegacap&&cachedMegacap.rankings){
+    mcRows=cachedMegacap.rankings.filter(function(row){
+      return(row.ticker||'').toLowerCase().includes(lq)||(row.label||'').toLowerCase().includes(lq);
+    });
+  }
+
+  var scRows=[];
+  if(cachedScan&&cachedScan.groups){
+    cachedScan.groups.forEach(function(grp){
+      (grp.rows||[]).forEach(function(row){
+        if((row.ticker||'').toLowerCase().includes(lq)
+          ||(row.parent||'').toLowerCase().includes(lq)
+          ||(grp.parent_regime||'').toLowerCase().includes(lq)
+          ||(row.action_label||'').toLowerCase().includes(lq)
+          ||(row.insider_annotation||'').toLowerCase().includes(lq)){
+          scRows.push(Object.assign({},row,{_regime:grp.parent_regime,_ret20d:grp.parent_20d_return}));
+        }
+      });
+    });
+  }
+
+  label.textContent=(mcRows.length+scRows.length)+' results for "'+q+'"';
+
+  mc.innerHTML='';
+  if(mcRows.length){
+    var lbl=document.createElement('div');lbl.className='search-group-label';lbl.textContent='Mega-Cap ('+mcRows.length+')';
+    var tbl=document.createElement('div');
+    mc.appendChild(lbl);mc.appendChild(tbl);
+    renderMegacap({rankings:mcRows,as_of:cachedMegacap?cachedMegacap.as_of:''},tbl);
+  }
+
+  sc.innerHTML='';
+  if(scRows.length){
+    var lbl2=document.createElement('div');lbl2.className='search-group-label';lbl2.textContent='Dependents ('+scRows.length+')';
+    sc.appendChild(lbl2);
+    var W=[48,80,72,88,88,160,72,80,72,128,120];
+    var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','Insiders','Earnings'];
+    var A=['left','left','left','','','left','','','','left','left'];
+    var tb=scRows.map(function(row){
+      var tk=row.ticker||'',par=row.parent||'';
+      var rsN=row.rs_score!=null?parseFloat(row.rs_score):null;
+      var erv=row.est_rev!=null?row.est_rev:null;
+      var rvN=row.rvol!=null?row.rvol:null;
+      var cfN=row.confirm!=null?row.confirm:null;
+      var cfMax=row.confirm_max!=null?row.confirm_max:5;
+      var ins=row.insider_annotation||'',action=row.action_label||'';
+      var cfH=cfN!=null?'<span class="'+confClass(cfN,cfMax)+'">'+cfN+'/'+cfMax+'</span>':'<span class="conf-low">—</span>';
+      var insH=ins?'<span class="'+insiderClass(ins)+'">'+ins+'</span>':'<span class="ins-none">—</span>';
+      var earnDays=row.earnings_days!=null?row.earnings_days:null;
+      var earnLbl=earningsLabel(earnDays);
+      var earnSty=earningsStyle(earnDays);
+      var earnH=earnLbl?'<span style="'+earnSty+'">'+earnLbl+'</span>':'<span style="color:var(--dim)">—</span>';
+      return'<tr><td class="left" style="color:var(--muted)">'+(row.rank!=null?row.rank:'—')+'</td>'
+        +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
+        +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
+        +'<td>'+fmt2(row.price)+'</td>'
+        +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+'</td>'
+        +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span></td>'
+        +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
+        +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
+        +'<td>'+cfH+'</td>'
+        +'<td class="left">'+insH+'</td>'
+        +'<td class="left">'+earnH+'</td></tr>';
+    }).join('');
+    var tbl2=document.createElement('div');
+    tbl2.innerHTML='<table class="data-table"><colgroup>'+buildColgroup(W)+'</colgroup>'+buildThead(L,A,W)+'<tbody>'+tb+'</tbody></table>';
+    sc.appendChild(tbl2);
+    tbl2.querySelectorAll('.ticker-cell').forEach(function(el){attachTickerEvents(el,el.dataset.symbol);});
+  }
+}
+
+/* ── Capture ──────────────────────────── */
+var captureBtn=document.getElementById('capture-btn');
+captureBtn.addEventListener('click',async function(){
+  captureBtn.disabled=true;captureBtn.textContent='Capturing…';
+  try{
+    var r=await fetch('/api/journal/capture',{method:'POST'});
+    var d=await r.json();
+    if(d.status==='success'){captureBtn.textContent='✓ '+d.rows_added+' rows added';loadJournal();}
+    else if(d.status==='exists'){captureBtn.textContent='Already captured today';}
+    else{captureBtn.textContent='✗ Failed';console.error('capture failed:',d);}
+  }catch(err){captureBtn.textContent='✗ Error';console.error('capture error:',err);}
+  setTimeout(function(){captureBtn.disabled=false;captureBtn.innerHTML='&#128247; Capture snapshot';},4000);
+});
+
+/* ── Macro Observations ───────────────── */
+var cachedObservations=[];
+
+function obsPillClass(type){
+  var m={_8k:'obs-pill-8k',Earnings:'obs-pill-earnings',News:'obs-pill-news',Thematic:'obs-pill-thematic',Other:'obs-pill-other'};
+  if(type==='8-K')return'obs-pill obs-pill-8k';
+  return'obs-pill '+(m[type]||'obs-pill-other');
+}
+
+function renderObservations(obs){
+  var list=document.getElementById('obs-list');
+  var empty=document.getElementById('obs-empty');
+  if(!obs||!obs.length){
+    list.innerHTML='';
+    list.appendChild(empty);
+    empty.style.display='';
+    return;
+  }
+  empty.style.display='none';
+  list.innerHTML=obs.map(function(o){
+    var note80=o.note.length>80?o.note.slice(0,80)+'…':o.note;
+    var affected=o.affected_tickers&&o.affected_tickers.length?'<span class="obs-affected">Affected: '+escHtml(o.affected_tickers.join(' '))+'</span>':'';
+    var linkBtn=o.link?'<a href="'+escHtml(o.link)+'" target="_blank" class="obs-act-btn" title="Open link">🔗</a>':'';
+    return'<div class="obs-row">'
+      +'<span class="'+obsPillClass(o.type)+'">'+escHtml(o.type)+'</span>'
+      +'<span class="obs-date">'+o.observation_date+'</span>'
+      +'<span class="obs-ticker">'+escHtml(o.primary_ticker)+'</span>'
+      +'<span class="obs-note" title="'+escHtml(o.note)+'">— '+escHtml(note80)+'</span>'
+      +affected
+      +'<span class="obs-actions">'
+      +linkBtn
+      +'<button class="obs-act-btn" title="Edit" onclick="openObsModal('+o.id+')">✏</button>'
+      +'<button class="obs-act-btn" title="Delete" onclick="deleteObs('+o.id+')">🗑</button>'
+      +'</span>'
+      +'</div>';
+  }).join('');
+}
+
+async function loadObservations(){
+  try{
+    var r=await fetch('/api/observations');
+    if(!r.ok){console.error('loadObservations failed:',r.statusText);return;}
+    var data=await r.json();
+    cachedObservations=data.observations||[];
+    renderObservations(cachedObservations);
+  }catch(err){console.error('loadObservations:',err);}
+}
+
+/* ── Obs Modal ────────────────────────── */
+var _obsEditId=null;
+
+function _todayISO(){
+  var d=new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+async function _loadDependents(parent){
+  var list=document.getElementById('obs-affected-list');
+  list.innerHTML='<span style="color:var(--muted);font-size:11px">Loading…</span>';
+  try{
+    var r=await fetch('/api/graph/dependents/'+encodeURIComponent(parent));
+    if(!r.ok){list.innerHTML='<span style="color:var(--muted);font-size:11px">—</span>';return[];}
+    var data=await r.json();
+    var deps=data.dependents||[];
+    if(!deps.length){list.innerHTML='<span style="color:var(--muted);font-size:11px">No dependents in graph</span>';return[];}
+    list.innerHTML=deps.map(function(d){
+      return'<label class="obs-dep-chk"><input type="checkbox" value="'+escHtml(d)+'"> '+escHtml(d)+'</label>';
+    }).join('');
+    return deps;
+  }catch(err){console.error('_loadDependents:',err);list.innerHTML='';return[];}
+}
+
+async function openObsModal(editId){
+  _obsEditId=editId||null;
+  document.getElementById('obs-modal-title').textContent=_obsEditId?'Edit Observation':'Add Observation';
+  document.getElementById('obs-modal-toast').textContent='';
+
+  var fDate=document.getElementById('obs-f-date');
+  var fType=document.getElementById('obs-f-type');
+  var fPrimary=document.getElementById('obs-f-primary');
+  var fNote=document.getElementById('obs-f-note');
+  var fLink=document.getElementById('obs-f-link');
+
+  // Populate primary ticker dropdown from scan data
+  fPrimary.innerHTML='';
+  var parents=[];
+  if(cachedScan&&cachedScan.groups){
+    parents=cachedScan.groups.map(function(g){return g.parent;}).filter(function(v,i,a){return a.indexOf(v)===i;});
+  }
+  if(!parents.length){parents=['NVDA','MSFT','AAPL','GOOGL','AMZN','META','TSLA','AVGO','ORCL','TSM'];}
+  parents.forEach(function(p){
+    var opt=document.createElement('option');opt.value=p;opt.textContent=p;fPrimary.appendChild(opt);
+  });
+
+  if(_obsEditId){
+    var obs=cachedObservations.find(function(o){return o.id===_obsEditId;});
+    if(obs){
+      fDate.value=obs.observation_date;
+      fType.value=obs.type;
+      fPrimary.value=obs.primary_ticker;
+      fNote.value=obs.note;
+      fLink.value=obs.link||'';
+      document.getElementById('obs-note-counter').textContent=obs.note.length+' / 500';
+      await _loadDependents(obs.primary_ticker);
+      var checked=obs.affected_tickers||[];
+      document.querySelectorAll('#obs-affected-list input[type=checkbox]').forEach(function(cb){
+        cb.checked=checked.indexOf(cb.value)>=0;
+      });
+    }
+  } else {
+    fDate.value=_todayISO();
+    fType.value='8-K';
+    fNote.value='';
+    fLink.value='';
+    document.getElementById('obs-note-counter').textContent='0 / 500';
+    await _loadDependents(parents[0]);
+  }
+
+  document.getElementById('obs-modal-overlay').classList.add('open');
+}
+
+document.getElementById('obs-add-btn').addEventListener('click',function(){openObsModal(null);});
+document.getElementById('obs-cancel-btn').addEventListener('click',function(){
+  document.getElementById('obs-modal-overlay').classList.remove('open');
+});
+document.getElementById('obs-modal-overlay').addEventListener('click',function(e){
+  if(e.target===this)this.classList.remove('open');
+});
+
+document.getElementById('obs-f-primary').addEventListener('change',function(){
+  _loadDependents(this.value);
+});
+
+document.getElementById('obs-f-note').addEventListener('input',function(){
+  document.getElementById('obs-note-counter').textContent=this.value.length+' / 500';
+});
+
+document.getElementById('obs-dep-all').addEventListener('click',function(){
+  document.querySelectorAll('#obs-affected-list input[type=checkbox]').forEach(function(cb){cb.checked=true;});
+});
+document.getElementById('obs-dep-none').addEventListener('click',function(){
+  document.querySelectorAll('#obs-affected-list input[type=checkbox]').forEach(function(cb){cb.checked=false;});
+});
+
+document.getElementById('obs-save-btn').addEventListener('click',async function(){
+  var fDate=document.getElementById('obs-f-date').value;
+  var fType=document.getElementById('obs-f-type').value;
+  var fPrimary=document.getElementById('obs-f-primary').value;
+  var fNote=document.getElementById('obs-f-note').value.trim();
+  var fLink=document.getElementById('obs-f-link').value.trim();
+  if(!fDate||!fType||!fPrimary||!fNote){
+    document.getElementById('obs-modal-toast').textContent='All fields except link are required.';
+    return;
+  }
+  var affected=[];
+  document.querySelectorAll('#obs-affected-list input[type=checkbox]:checked').forEach(function(cb){affected.push(cb.value);});
+  var payload={observation_date:fDate,type:fType,primary_ticker:fPrimary,affected_tickers:affected,note:fNote,link:fLink};
+  try{
+    var url=_obsEditId?'/api/observations/'+_obsEditId:'/api/observations';
+    var method=_obsEditId?'PUT':'POST';
+    var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!r.ok){var e=await r.json();document.getElementById('obs-modal-toast').textContent='Error: '+(e.detail||r.statusText);return;}
+    var data=await r.json();
+    var toast=document.getElementById('obs-modal-toast');
+    toast.textContent=(data.journal_updated||0)+' journal entries updated.';
+    setTimeout(function(){document.getElementById('obs-modal-overlay').classList.remove('open');},1200);
+    loadObservations();
+    _cache_invalidate_journal();
+  }catch(err){console.error('saveObs:',err);document.getElementById('obs-modal-toast').textContent='Save failed.';}
+});
+
+function _cache_invalidate_journal(){
+  cachedJournalRows={};
+  cachedJournalDates=[];
+}
+
+async function deleteObs(obsId){
+  if(!confirm('Delete this observation? (Journal notes will not be changed.)'))return;
+  try{
+    var r=await fetch('/api/observations/'+obsId,{method:'DELETE'});
+    if(!r.ok){console.error('deleteObs failed:',r.statusText);return;}
+    loadObservations();
+  }catch(err){console.error('deleteObs:',err);}
+}
+
+/* ── Filings ──────────────────────────── */
+var _filingsUniverse='all';
+var _filingsSearch='';
+var _filingsData=null;
+
+var _ITEM_PILL_CLASS={
+  '1.01':'item-pill-agreement','1.02':'item-pill-terminated',
+  '2.01':'item-pill-acquisition','2.02':'item-pill-results',
+  '2.05':'item-pill-departure','5.02':'item-pill-executive',
+  '7.01':'item-pill-fd','8.01':'item-pill-other'
+};
+var _ITEM_LABEL={
+  '1.01':'Material Agreement','1.02':'Agreement Terminated',
+  '2.01':'Asset Acquisition','2.02':'Results of Ops',
+  '2.05':'Employee Departure','5.02':'Executive Change',
+  '7.01':'Regulation FD','8.01':'Other Material Event'
+};
+
+var _ITEM_LABEL_SHORT={'1.01':'Material Agreement','1.02':'Terminated','2.01':'Acquisition/Disposal','2.02':'Results','2.05':'Employee Departure','5.02':'Exec Change','7.01':'Reg FD','8.01':'Other'};
+
+async function loadHighImpactFilings(){
+  var el=document.getElementById('high-filings-list');
+  if(!el)return;
+  try{
+    var r=await fetch('/api/filings?universe=all');
+    if(!r.ok)throw new Error(r.statusText);
+    var d=await r.json();
+    var cutoff=new Date();cutoff.setDate(cutoff.getDate()-7);
+    var filings=[];
+    (d.groups||[]).forEach(function(g){
+      (g.filings||[]).forEach(function(f){
+        if(f.impact==='HIGH'&&new Date(f.filed_date)>=cutoff)filings.push(f);
+      });
+    });
+    filings.sort(function(a,b){return b.filed_date.localeCompare(a.filed_date);});
+    filings=filings.slice(0,5);
+    if(!filings.length){
+      el.innerHTML='<div style="color:var(--muted);font-size:12px;font-style:italic;">No high-impact filings this week</div>';
+      return;
+    }
+    el.innerHTML=filings.map(function(f){
+      var itemLabels=(f.item_numbers||'').split(',').filter(Boolean).map(function(i){return _ITEM_LABEL_SHORT[i.trim()]||i.trim();}).join(' · ');
+      var dt=f.filed_date?f.filed_date.slice(5).replace('-','/'):'';
+      var summaryText=f.summary||(f.description?f.description.slice(0,150):'');
+      var summaryHtml=summaryText?'<div class="hf-summary">'+escHtml(summaryText)+'</div>':'';
+      return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">'
+        +'<div style="flex:1;min-width:0;">'
+        +'<span style="font-size:11px;font-weight:600;color:var(--red);margin-right:6px;">[HIGH]</span>'
+        +'<span style="font-size:13px;font-weight:700;color:var(--text);">'+escHtml(f.ticker)+'</span>'
+        +'<span style="color:var(--muted);font-size:12px;margin:0 4px;">·</span>'
+        +'<span style="color:var(--muted);font-size:12px;">'+escHtml(dt)+'</span>'
+        +(itemLabels?'<span style="color:var(--muted);font-size:12px;margin:0 4px;">·</span><span style="font-size:12px;color:var(--text);">'+escHtml(itemLabels)+'</span>':'')
+        +summaryHtml
+        +'</div>'
+        +'<div style="display:flex;gap:6px;flex-shrink:0;">'
+        +(f.filing_url?'<a href="'+escHtml(f.filing_url)+'" target="_blank" rel="noopener" style="font-size:12px;color:var(--blue);text-decoration:none;">View</a>':'')
+        +'</div>'
+        +'</div>';
+    }).join('');
+  }catch(err){
+    console.error('loadHighImpactFilings:',err);
+    el.innerHTML='<div style="color:var(--muted);font-size:12px;font-style:italic;">No high-impact filings this week</div>';
+  }
+}
+
+async function loadFilings(){
+  var c=document.getElementById('filings-content');
+  if(!c)return;
+  c.innerHTML='<div class="loading-overlay">Loading…</div>';
+  try{
+    var url='/api/filings?universe='+encodeURIComponent(_filingsUniverse);
+    var r=await fetch(url);
+    if(!r.ok)throw new Error(r.statusText);
+    _filingsData=await r.json();
+    renderFilings();
+  }catch(err){
+    console.error('loadFilings:',err);
+    c.innerHTML='<div class="filings-empty">Failed to load filings: '+escHtml(err.message)+'</div>';
+  }
+}
+
+function renderFilings(){
+  var c=document.getElementById('filings-content');
+  if(!c||!_filingsData)return;
+  var groups=_filingsData.groups||[];
+  var q=_filingsSearch.toLowerCase();
+  if(q){
+    groups=groups.map(function(g){
+      var filt=g.filings.filter(function(f){
+        return (f.title||'').toLowerCase().indexOf(q)>=0
+          ||(f.description||'').toLowerCase().indexOf(q)>=0
+          ||(f.item_numbers||'').toLowerCase().indexOf(q)>=0
+          ||f.ticker.toLowerCase().indexOf(q)>=0;
+      });
+      if(!filt.length)return null;
+      return Object.assign({},g,{filings:filt,filing_count:filt.length});
+    }).filter(Boolean);
+  }
+  if(!groups.length){
+    c.innerHTML='<div class="filings-empty">No material 8-K filings in the last 7 days</div>';
+    return;
+  }
+  c.innerHTML=groups.map(function(g){
+    var headerCls='filings-group-header'+(g.is_megacap?' megacap':'');
+    var rows=g.filings.map(function(f){return buildFilingRow(f);}).join('');
+    return '<div class="filings-group" data-ticker="'+escHtml(g.ticker)+'">'
+      +'<div class="'+headerCls+'" onclick="toggleFilingGroup(this)">'
+      +'<span class="fg-ticker">'+escHtml(g.ticker)+'</span>'
+      +(g.is_megacap?'<span class="fg-count" style="color:var(--blue)">Mega-cap</span>':'<span class="fg-count">Dependent</span>')
+      +'<span class="fg-count">('+g.filing_count+' filing'+(g.filing_count!==1?'s':'')+')</span>'
+      +'<span class="fg-chevron">›</span>'
+      +'</div>'
+      +'<div class="filings-group-body">'+rows+'</div>'
+      +'</div>';
+  }).join('');
+}
+
+function buildFilingRow(f){
+  var items=(f.item_numbers||'').split(',').filter(Boolean);
+  var pills=items.map(function(i){
+    var ic=i.trim();
+    var cls=_ITEM_PILL_CLASS[ic]||'item-pill-other';
+    var lbl=_ITEM_LABEL[ic]||ic;
+    return '<span class="item-pill '+cls+'">'+escHtml(lbl)+'</span>';
+  }).join('');
+  var impCls=f.impact==='HIGH'?'impact-high':f.impact==='MEDIUM'?'impact-medium':'impact-low';
+  var impSrc=f.impact_source==='manual'?' ✎':'';
+  var impPill='<div class="impact-dropdown-wrap">'
+    +'<button class="impact-pill '+impCls+'" onclick="toggleImpactDropdown(this,'+f.id+')" title="Click to change impact">'+escHtml(f.impact)+impSrc+'</button>'
+    +'<div class="impact-dropdown" id="imp-dd-'+f.id+'">'
+    +'<div class="impact-opt" onclick="setImpact('+f.id+',\'HIGH\',this)">HIGH</div>'
+    +'<div class="impact-opt" onclick="setImpact('+f.id+',\'MEDIUM\',this)">MEDIUM</div>'
+    +'<div class="impact-opt" onclick="setImpact('+f.id+',\'LOW\',this)">LOW</div>'
+    +'</div></div>';
+  var saveLabel=f.saved_to_journal?'✓ Saved':'+ Save to Journal';
+  var saveCls='filing-save-btn'+(f.saved_to_journal?' saved':'');
+  var today=new Date().toISOString().slice(0,10);
+  var summaryText=f.summary||(f.description?f.description.slice(0,150):'');
+  var summaryHtml=summaryText?'<div class="filing-summary">'+escHtml(summaryText)+'</div>':'';
+  return '<div class="filing-row" id="frow-'+f.id+'">'
+    +'<div class="filing-meta">'
+    +'<span class="filing-date">'+escHtml(f.filed_date)+'</span>'
+    +'<span class="filing-form">'+escHtml(f.form_type)+'</span>'
+    +(f.title?'<span class="filing-title">'+escHtml(f.title)+'</span>':'')
+    +'<div class="filing-items">'+pills+'</div>'
+    +summaryHtml
+    +impPill
+    +'</div>'
+    +'<div class="filing-actions">'
+    +(f.filing_url?'<a class="filing-link-btn" href="'+escHtml(f.filing_url)+'" target="_blank" rel="noopener">View Filing ↗</a>':'')
+    +'<button class="'+saveCls+'" onclick="toggleFilingSaveForm('+f.id+')" '+(f.saved_to_journal?'disabled':'')+'>'
+    +escHtml(saveLabel)+'</button>'
+    +'</div>'
+    +'<div class="filing-inline-form" id="fif-'+f.id+'">'
+    +'<label class="fif-label">Note</label>'
+    +'<textarea class="fif-input" id="fif-note-'+f.id+'" rows="2" placeholder="Add a note about this filing…"></textarea>'
+    +'<label class="fif-label">Observation date</label>'
+    +'<input class="fif-input" type="date" id="fif-date-'+f.id+'" value="'+escHtml(f.filed_date)+'">'
+    +'<div class="fif-row">'
+    +'<button class="fif-submit" onclick="saveFilingToJournal('+f.id+')">Save &amp; Link</button>'
+    +'<button class="fif-cancel" onclick="toggleFilingSaveForm('+f.id+')">Cancel</button>'
+    +'<span class="fif-toast" id="fif-toast-'+f.id+'"></span>'
+    +'</div>'
+    +'</div>'
+    +'</div>';
+}
+
+function toggleFilingGroup(header){
+  var body=header.nextElementSibling;
+  var chevron=header.querySelector('.fg-chevron');
+  var open=body.classList.toggle('open');
+  if(chevron)chevron.classList.toggle('open',open);
+}
+
+function toggleImpactDropdown(btn,id){
+  var dd=document.getElementById('imp-dd-'+id);
+  if(!dd)return;
+  var isOpen=dd.classList.toggle('open');
+  if(isOpen){
+    function closeOnOutside(e){
+      if(!dd.contains(e.target)&&e.target!==btn){dd.classList.remove('open');document.removeEventListener('click',closeOnOutside,true);}
+    }
+    setTimeout(function(){document.addEventListener('click',closeOnOutside,true);},0);
+  }
+}
+
+async function setImpact(id,impact,optEl){
+  var dd=optEl.closest('.impact-dropdown');
+  if(dd)dd.classList.remove('open');
+  try{
+    var r=await fetch('/api/filings/'+id+'/impact',{
+      method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({impact:impact,impact_source:'manual'})
+    });
+    if(!r.ok){console.error('setImpact failed:',r.statusText);return;}
+    // Update local data and re-render
+    if(_filingsData){
+      _filingsData.groups.forEach(function(g){
+        g.filings.forEach(function(f){
+          if(f.id===id){f.impact=impact;f.impact_source='manual';}
+        });
+      });
+    }
+    renderFilings();
+  }catch(err){console.error('setImpact:',err);}
+}
+
+function toggleFilingSaveForm(id){
+  var form=document.getElementById('fif-'+id);
+  if(!form)return;
+  form.classList.toggle('open');
+}
+
+async function saveFilingToJournal(id){
+  var noteEl=document.getElementById('fif-note-'+id);
+  var dateEl=document.getElementById('fif-date-'+id);
+  var toast=document.getElementById('fif-toast-'+id);
+  var note=(noteEl&&noteEl.value)||'';
+  var obsDate=(dateEl&&dateEl.value)||new Date().toISOString().slice(0,10);
+  if(!note.trim()){if(toast)toast.textContent='Note is required.';return;}
+  try{
+    var r=await fetch('/api/filings/'+id+'/journal',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({note:note,affected_tickers:[],observation_date:obsDate})
+    });
+    if(!r.ok){var e=await r.json();if(toast)toast.textContent='Error: '+(e.detail||r.statusText);return;}
+    var data=await r.json();
+    if(toast)toast.textContent='✓ '+(data.journal_updated||0)+' entries updated';
+    // Update local state
+    if(_filingsData){
+      _filingsData.groups.forEach(function(g){
+        g.filings.forEach(function(f){if(f.id===id)f.saved_to_journal=true;});
+      });
+    }
+    setTimeout(function(){
+      renderFilings();
+      _cache_invalidate_journal();
+    },1000);
+  }catch(err){console.error('saveFilingToJournal:',err);if(toast)toast.textContent='Save failed.';}
+}
+
+// Filter bar events
+document.querySelectorAll('.f-uni-btn').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    _filingsUniverse=btn.dataset.universe;
+    document.querySelectorAll('.f-uni-btn').forEach(function(b){b.classList.toggle('active',b===btn);});
+    loadFilings();
+  });
+});
+document.getElementById('filings-search').addEventListener('input',function(){
+  _filingsSearch=this.value.trim();
+  if(_filingsData)renderFilings();
+});
+
+/* ── Refresh ──────────────────────────── */
+async function refreshAll(){
+  var btn=document.getElementById('refresh-btn');
+  btn.querySelector('.nav-icon').textContent='↻';
+  btn.disabled=true;
+  await Promise.allSettled([loadBanner(),loadScheduler(),loadMegacap(),loadScan(),loadJournal(),loadActivityLog(),loadObservations(),loadHighImpactFilings()]);
+  btn.disabled=false;
+  var now=new Date();
+  var ts=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('sb-last-updated').textContent='Updated '+ts;
+  document.getElementById('topbar-ts').textContent=ts;
+}
+document.getElementById('refresh-btn').addEventListener('click',refreshAll);
+
+refreshAll();
+setInterval(refreshAll,5*60*1000);
+</script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-04-21</periodOfReport>
+
+    <notSubjectToSection16>0</notSubjectToSection16>
+
+    <issuer>
+        <issuerCik>0001678660</issuerCik>
+        <issuerName>Prelude Therapeutics Inc</issuerName>
+        <issuerTradingSymbol>PRLD</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001572451</rptOwnerCik>
+            <rptOwnerName>Bonita David P</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>C/O PRELUDE THERAPEUTICS INC.</rptOwnerStreet1>
+            <rptOwnerStreet2>175 INNOVATION BOULEVARD</rptOwnerStreet2>
+            <rptOwnerCity>WILMINGTON</rptOwnerCity>
+            <rptOwnerState>DE</rptOwnerState>
+            <rptOwnerZipCode>19805</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>1</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>1</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle></officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>0</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-04-21</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>P</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>1689189</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>4.44</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>11808945</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See footnotes</value>
+                    <footnoteId id="F2"/>
+                    <footnoteId id="F5"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-04-21</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>P</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>1126126</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>4.44</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>1126126</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See footnotes</value>
+                    <footnoteId id="F4"/>
+                    <footnoteId id="F5"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeHolding>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>526300</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See footnotes</value>
+                    <footnoteId id="F3"/>
+                    <footnoteId id="F5"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeHolding>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">These securities were purchased in an underwritten public offering.</footnote>
+        <footnote id="F2">These securities are held of record by OrbiMed Private Investments VI, LP (&quot;OPI VI&quot;). OrbiMed Capital GP VI LLC (&quot;GP VI&quot;) is the general partner of OPI VI and OrbiMed Advisors LLC (&quot;OrbiMed Advisors&quot;) is the managing member of GP VI. The Reporting Person is a member of OrbiMed Advisors. By virtue of such relationships, OrbiMed Advisors and GP VI may be deemed to have voting power and investment power over the securities held by OPI VI and, as a result, may be deemed to have beneficial ownership over such securities. OrbiMed Advisors exercises voting and investment power through a management committee comprised of Carl L. Gordon, Sven H. Borho, and W. Carter Neild, each of whom disclaims beneficial ownership of the securities held by OPI VI.</footnote>
+        <footnote id="F3">These securities are held of record by OrbiMed Partners Master Fund Limited (&quot;OPM&quot;). OrbiMed Capital LLC (&quot;OrbiMed Capital&quot;) is the investment advisor to OPM. OrbiMed Capital is a relying advisor of OrbiMed Advisors. OrbiMed Advisors and OrbiMed Capital exercise voting and investment power through a management committee comprised of Carl L. Gordon, Sven H. Borho, and W. Carter Neild, each of whom disclaims beneficial ownership of the shares held by OPM.</footnote>
+        <footnote id="F4">These securities are held of record by OrbiMed Genesis Master Fund, L.P. (&quot;Genesis Master Fund&quot;). OrbiMed Genesis GP LLC (&quot;Genesis GP&quot;) is the general partner of Genesis Master Fund. OrbiMed Advisors is the managing member of Genesis GP. By virtue of such relationships, Genesis GP and OrbiMed Advisors may be deemed to have voting and investment power with respect to the securities held by Genesis Master Fund. OrbiMed Advisors exercises voting and investment power through a management committee comprised of Carl L. Gordon, Sven H. Borho, and W. Carter Neild, each of whom disclaims beneficial ownership of the shares held by Genesis Master Fund.</footnote>
+        <footnote id="F5">Each of the Reporting Person, OrbiMed Advisors, GP VI, OrbiMed Capital and Genesis GP disclaims beneficial ownership of the securities reported herein for purposes of Rule 16a-1(a) under the Securities Exchange Act of 1934, as amended (the &quot;Exchange Act&quot;), except to the extent of his or its pecuniary interest therein, if any. This report on Form 4 shall not be deemed an admission that any such person or entity is a beneficial owner of such securities for the purpose of Section 16 of the Exchange Act, or for any other purpose.</footnote>
+    </footnotes>
+
+    <ownerSignature>
+        <signatureName>/s/ David P. Bonita</signatureName>
+        <signatureDate>2026-04-23</signatureDate>
+    </ownerSignature>
+</ownershipDocument>

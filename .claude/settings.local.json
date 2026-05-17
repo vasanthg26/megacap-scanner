@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sec_edgar_downloader\")",
+      "Bash(python -c \"import requests; print\\('requests ok'\\)\")",
+      "Bash(python -c \"import xml.etree.ElementTree as ET; print\\('xml ok'\\)\")",
+      "Bash(python -m scanner scan-megacap)",
+      "Bash(python -m scanner scan)",
+      "Bash(python -m scanner backtest-estimates)",
+      "Bash(python -c \"import scanner.cli; import scanner.signals.megacap; import scanner.backtest.rvol_runner; print\\('imports OK'\\)\")",
+      "Bash(python -m scanner backtest-rvol)",
+      "Bash(python -m scanner scan --show-estimates)",
+      "Bash(python -m scanner scan --help)",
+      "Bash(python -c \"import scanner.cli\")",
+      "Bash(python -c \"import scanner.backtest.confirmation_runner\")",
+      "Bash(python -m scanner --help)",
+      "Bash(python -m scanner backtest-confirmation --help)",
+      "Bash(python *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/)",
+      "Bash(curl *)",
+      "Bash(pkill -f \"run.py\")",
+      "Bash(pkill -f \"scanner\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 12368 /F)",
+      "Bash(pip show *)"
+    ]
+  }
+}

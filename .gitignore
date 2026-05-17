@@ -1,0 +1,14 @@
+data/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.db
+*.duckdb
+.env
+config/settings.yaml

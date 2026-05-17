@@ -1,0 +1,9 @@
+# SEC EDGAR requires HTTP requests to identify the accessing application.
+# Set SEC_USER_AGENT to your real application name and contact email.
+# Format: "AppName/Version (contact: real-email@domain.com)"
+SEC_USER_AGENT: "megacap-scanner/0.1 (contact: your-email@example.com)"
+
+# Anthropic API key for 8-K filing summarization (optional).
+# Get your API key from console.anthropic.com
+# On Railway: set this as an environment variable instead.
+anthropic_api_key: YOUR_ANTHROPIC_API_KEY_HERE
