@@ -1358,6 +1358,7 @@ def debug():
         "scheduler_runs_count": sched,
         "scan_results_count": scan_res,
         "filings_count": filings_count,
+        "anthropic_key_set": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "scan_result": {
             "scan_date": str(scan_row[0]),
             "computed_at": str(scan_row[1]),
