@@ -760,6 +760,24 @@ async def api_run_cleanup_filings():
     return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
 
 
+@app.get("/api/admin/reingest-filings-14d")
+async def reingest_filings_14d():
+    from scanner.db import get_connection
+    from scanner.ingest.filings import ingest_filings
+
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM filings_8k")
+    finally:
+        conn.close()
+
+    async def _run():
+        await asyncio.to_thread(ingest_filings, None, 14)
+
+    asyncio.create_task(_run())
+    return {"status": "started - check filings page in 2 minutes"}
+
+
 @app.get("/api/admin/clear-all-filings")
 def clear_all_filings():
     from scanner.db import get_connection
