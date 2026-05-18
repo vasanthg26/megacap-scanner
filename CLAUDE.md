@@ -240,3 +240,38 @@ pytest --cov=scanner              # with coverage
 - Use in-memory DuckDB (`duckdb.connect(":memory:")`) in all tests — never the data/ file.
 - `scanner.graph.loader._load_edges` is `@lru_cache` — use `_load_edges.cache_clear()` if a
   test modifies the YAML (prefer not to; test with the real YAML).
+
+## Railway Deployment Notes
+
+### DATABASE_PATH
+- Must be set as environment variable: `/data/scanner.duckdb`
+- Leading slash required — points to persistent volume
+- Variable name must be `DATABASE_PATH` not `DATABASE_URL`
+
+### ANTHROPIC_API_KEY
+- Must be set in Railway Variables tab
+- Must NOT have quotes or extra spaces
+- Starts with `sk-ant-`
+- 401 error means key is wrong or has extra characters
+
+### Ingestion
+- `ingest-filings` default 7 days too narrow for weekends; use `--days-back 14` for initial backfill on fresh deployment
+- Scan uses `MAX(date)` from prices not `CURRENT_DATE` — works correctly on weekends and holidays
+
+### Fresh Deployment Checklist
+1. Set `DATABASE_PATH=/data/scanner.duckdb`
+2. Set `SEC_USER_AGENT=name email@domain.com`
+3. Set `ANTHROPIC_API_KEY=sk-ant-...`
+4. Add persistent volume mounted at `/data`
+5. Deploy
+6. Click Refresh All from Scheduler page
+7. Wait ~3 minutes for full completion
+8. Scanner page loads with all data
+
+### Admin Endpoints (temporary, for maintenance)
+- `GET /api/admin/clear-all-filings`
+- `GET /api/admin/clear-high-filings`
+- `GET /api/admin/reingest-filings-14d`
+- `GET /api/admin/generate-summaries`
+- `GET /api/admin/test-anthropic`
+- `GET /api/debug`
