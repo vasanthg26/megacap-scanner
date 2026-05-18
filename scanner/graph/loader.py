@@ -42,6 +42,7 @@ def get_all_tickers() -> list[str]:
     for e in edges:
         tickers.add(e.parent)
         tickers.add(e.child)
+    tickers.update(["QQQ", "XLK"])  # benchmarks required for megacap RS calculations
     return sorted(tickers)
 
 
