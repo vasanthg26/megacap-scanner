@@ -760,6 +760,21 @@ async def api_run_cleanup_filings():
     return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
 
 
+@app.delete("/api/admin/clear-high-filings")
+def clear_high_filings():
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        conn.execute("""
+            DELETE FROM filings_8k
+            WHERE impact = 'HIGH'
+            AND (summary IS NULL OR summary = '')
+        """)
+    finally:
+        conn.close()
+    return {"deleted": "ok"}
+
+
 @app.post("/api/run/run-scan")
 async def api_run_scan():
     from scanner.web.scheduler import _job_scan, scheduler_status
