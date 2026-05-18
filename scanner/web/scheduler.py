@@ -15,6 +15,7 @@ scheduler_status: dict[str, Any] = {
     "last_filings": None,
     "last_cleanup": None,
     "last_scan": None,
+    "last_journal_capture": None,
     "last_ingest_ok": None,
     "last_estimates_ok": None,
     "last_insiders_ok": None,
@@ -22,6 +23,7 @@ scheduler_status: dict[str, Any] = {
     "last_filings_ok": None,
     "last_cleanup_ok": None,
     "last_scan_ok": None,
+    "last_journal_capture_ok": None,
 }
 
 # Module-level reference set by lifespan so api_status can query it.
@@ -42,6 +44,7 @@ _JOB_META = {
     "ingest_filings":   ("ingest-filings",    "last_filings",    "last_filings_ok"),
     "cleanup_filings":  ("cleanup-filings",   "last_cleanup",    "last_cleanup_ok"),
     "run_scan":         ("run-scan",          "last_scan",       "last_scan_ok"),
+    "journal_capture":  ("journal-capture",   "last_journal_capture", "last_journal_capture_ok"),
 }
 
 
@@ -313,6 +316,29 @@ def _job_filings() -> None:
         _write_activity_log("ingest-filings", "error", str(exc)[:200])
 
 
+def _job_journal_capture() -> None:
+    from scanner.web.app import _capture_journal_sync
+
+    logger.info("Scheduled job: journal capture starting")
+    try:
+        result = _capture_journal_sync()
+        ok = result.get("status") in ("success", "exists")
+        scheduler_status["last_journal_capture_ok"] = ok
+        scheduler_status["last_journal_capture"] = datetime.utcnow().isoformat()
+        if result.get("status") == "exists":
+            logger.info("Journal capture: already captured for today")
+            _write_activity_log("journal-capture", "success", result.get("message", "already captured"))
+        else:
+            rows = result.get("rows_added", 0)
+            logger.info("Journal capture completed: %d rows", rows)
+            _write_activity_log("journal-capture", "success", f"{rows} rows captured")
+    except Exception as exc:
+        scheduler_status["last_journal_capture"] = datetime.utcnow().isoformat()
+        scheduler_status["last_journal_capture_ok"] = False
+        logger.error("Journal capture job failed: %s", exc)
+        _write_activity_log("journal-capture", "error", str(exc)[:200])
+
+
 def _job_scan() -> None:
     from scanner.db import get_connection
     from scanner.web.app import _run_scan_today_sync
@@ -410,6 +436,15 @@ def create_scheduler():
         CronTrigger(hour=9, minute=30, timezone="America/New_York"),
         id="run_scan",
         name="run-scan",
+        replace_existing=True,
+    )
+
+    # Daily 9:35 AM ET — journal capture (after scan completes)
+    scheduler.add_job(
+        _job_journal_capture,
+        CronTrigger(hour=9, minute=35, timezone="America/New_York"),
+        id="journal_capture",
+        name="journal-capture",
         replace_existing=True,
     )
 

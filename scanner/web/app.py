@@ -1068,6 +1068,15 @@ async def api_run_scan():
     return {"status": "failed", "error": "Scan job failed — check server logs"}
 
 
+@app.post("/api/run/journal-capture")
+async def api_run_journal_capture():
+    from scanner.web.scheduler import _job_journal_capture, scheduler_status
+    await asyncio.to_thread(_job_journal_capture)
+    if scheduler_status.get("last_journal_capture_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Journal capture job failed — check server logs"}
+
+
 @app.post("/api/run/all")
 async def api_run_all():
     from scanner.web.scheduler import (
