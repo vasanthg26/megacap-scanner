@@ -848,6 +848,9 @@ function fmtDate(s){if(!s)return'';return String(s).slice(0,10);}
 function fmtRvol(v){if(v==null||isNaN(v))return'—';return Number(v).toFixed(2)+'x';}
 function fmtDec(v,d){if(v==null||isNaN(v))return'—';return(Number(v)>=0?'+':'')+Number(v).toFixed(d);}
 function fmtHistPct(v){if(v==null||isNaN(v))return'—';return Number(v*100).toFixed(0)+'%';}
+function trendArrow(t){if(t==='↑')return'<span style="color:var(--green)">↑</span>';if(t==='↓')return'<span style="color:var(--red)">↓</span>';if(t==='→')return'<span style="color:var(--muted)">→</span>';return'';}
+function fmtDaysAbove50ma(d){if(d==null||d===0)return'<span style="color:var(--dim)">—</span>';return'<span style="color:var(--green)">'+d+'d</span>';}
+function fmtRangePct(p){if(p==null||isNaN(p))return'<span style="color:var(--dim)">—</span>';var pi=Math.round(p);var c=p>=70?'var(--green)':p>=30?'var(--yellow)':'var(--red)';return'<span style="color:'+c+'">'+pi+'%</span>';}
 function valClass(v){if(v==null||isNaN(v))return'val-zero';if(v>0)return'val-pos';if(v<0)return'val-neg';return'val-zero';}
 function confClass(v,max){if(v==null)return'conf-low';var r=max>0?v/max:0;if(r>=0.7)return'conf-high';if(r>=0.4)return'conf-mid';return'conf-low';}
 function rvolClass(v){if(v==null||isNaN(v))return'rvol-low';return Number(v)>=1.5?'rvol-high':'rvol-low';}
@@ -1015,9 +1018,9 @@ function renderMegacap(data,c){
   if(!c)return;
   var rows=Array.isArray(data)?data:(data.rankings||[]);
   if(!rows.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No data available</div>';return;}
-  var W=[48,80,88,72,72,72,56,72,72,80,72,72,64,104,120];
-  var L=['#','Ticker','Price','RS-20','RS-60','RS-120','Trend','Vol Conv','Est Rev','RVOL','Confirm','Hist %','Score','Label','Earnings'];
-  var A=['left','left','','','','','','','','','','','','','left'];
+  var W=[48,80,88,80,72,72,56,72,72,88,72,54,60,72,64,104,120];
+  var L=['#','Ticker','Price','RS-20','RS-60','RS-120','Trend','Vol Conv','Est Rev','RVOL','Confirm','50MA','Range','Hist %','Score','Label','Earnings'];
+  var A=['left','left','','','','','','','','','','','','','','','left'];
   var cid=c.id||'mc';
   var tb=rows.map(function(row,i){
     var tk=row.ticker||'',rank=row.rank!=null?row.rank:i+1;
@@ -1043,17 +1046,21 @@ function renderMegacap(data,c){
     var earnLbl=earningsLabel(earnDays);
     var earnSty=earningsStyle(earnDays);
     var earnH=earnLbl?'<span style="'+earnSty+'">'+earnLbl+'</span>':'<span style="color:var(--dim)">—</span>';
+    var rs20Trend=trendArrow(row.rs_trend||'');
+    var rvolTrendMc=trendArrow(row.rvol_trend||'');
     return'<tr><td class="left">'+expBtn+rank+'</td>'
       +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
       +'<td>'+fmt2(row.price)+'</td>'
-      +'<td class="'+valClass(rs20v)+'">'+(rs20v!=null?fmtPct(rs20v*100):'—')+'</td>'
+      +'<td class="'+valClass(rs20v)+'">'+(rs20v!=null?fmtPct(rs20v*100):'—')+(rs20Trend?' '+rs20Trend:'')+'</td>'
       +'<td class="'+valClass(rs60v)+'">'+(rs60v!=null?fmtPct(rs60v*100):'—')+'</td>'
       +'<td class="'+valClass(rs120v)+'">'+(rs120v!=null?fmtPct(rs120v*100):'—')+'</td>'
       +'<td class="'+valClass(trendv)+'">'+(trendRaw!=null?trendRaw+'/2':'—')+'</td>'
       +'<td class="'+valClass(vcv)+'">'+(vcv!=null?fmtPct(vcv*100):'—')+'</td>'
       +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
-      +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
+      +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+(rvolTrendMc?' '+rvolTrendMc:'')+'</td>'
       +'<td>'+cfH+'</td>'
+      +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
+      +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
       +'<td>'+(hpv!=null?fmtHistPct(hpv):'—')+'</td>'
       +'<td class="'+valClass(sN)+'">'+(sN!=null?fmtScore(sN):'—')+'</td>'
       +'<td>'+labelPill(label)+'</td>'
@@ -1080,9 +1087,9 @@ function renderScan(data,c,dateElId,subStyle){
   var asOf=data.as_of||'';
   if(asOf&&dateElId){var de=document.getElementById(dateElId);if(de)de.textContent=subStyle?'as of '+fmtDate(asOf):fmtDate(asOf);}
   if(!groups.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No scan results</div>';return;}
-  var W=[48,80,72,88,88,160,72,80,72,128,120];
-  var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','Insiders','Earnings'];
-  var A=['left','left','left','','','left','','','','left','left'];
+  var W=[48,80,72,88,96,160,72,88,72,54,60,128,120];
+  var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','50MA','Range','Insiders','Earnings'];
+  var A=['left','left','left','','','left','','','','','','left','left'];
   var tb=groups.map(function(grp){
     var parent=grp.parent||'OTHER',regime=grp.parent_regime||'';
     var ret20d=grp.parent_20d_return!=null?grp.parent_20d_return:null;
@@ -1103,15 +1110,19 @@ function renderScan(data,c,dateElId,subStyle){
       var earnLbl=earningsLabel(earnDays);
       var earnSty=earningsStyle(earnDays);
       var earnH=earnLbl?'<span style="'+earnSty+'">'+earnLbl+'</span>':'<span style="color:var(--dim)">—</span>';
+      var rsTrend=trendArrow(row.rs_trend||'');
+      var rvolTrend=trendArrow(row.rvol_trend||'');
       return'<tr><td class="left" style="color:var(--muted)">'+(row.rank!=null?row.rank:'—')+'</td>'
         +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
         +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
         +'<td>'+fmt2(row.price)+'</td>'
-        +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+'</td>'
+        +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+(rsTrend?' '+rsTrend:'')+'</td>'
         +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span></td>'
         +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
-        +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
+        +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+(rvolTrend?' '+rvolTrend:'')+'</td>'
         +'<td>'+cfH+'</td>'
+        +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
+        +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
         +'<td class="left">'+insH+'</td>'
         +'<td class="left">'+earnH+'</td></tr>';
     }).join('');
@@ -1361,9 +1372,9 @@ function filterSearch(q){
   if(scRows.length){
     var lbl2=document.createElement('div');lbl2.className='search-group-label';lbl2.textContent='Dependents ('+scRows.length+')';
     sc.appendChild(lbl2);
-    var W=[48,80,72,88,88,160,72,80,72,128,120];
-    var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','Insiders','Earnings'];
-    var A=['left','left','left','','','left','','','','left','left'];
+    var W=[48,80,72,88,96,160,72,88,72,54,60,128,120];
+    var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','50MA','Range','Insiders','Earnings'];
+    var A=['left','left','left','','','left','','','','','','left','left'];
     var tb=scRows.map(function(row){
       var tk=row.ticker||'',par=row.parent||'';
       var rsN=row.rs_score!=null?parseFloat(row.rs_score):null;
@@ -1378,15 +1389,19 @@ function filterSearch(q){
       var earnLbl=earningsLabel(earnDays);
       var earnSty=earningsStyle(earnDays);
       var earnH=earnLbl?'<span style="'+earnSty+'">'+earnLbl+'</span>':'<span style="color:var(--dim)">—</span>';
+      var rsTrend=trendArrow(row.rs_trend||'');
+      var rvolTrend=trendArrow(row.rvol_trend||'');
       return'<tr><td class="left" style="color:var(--muted)">'+(row.rank!=null?row.rank:'—')+'</td>'
         +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
         +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
         +'<td>'+fmt2(row.price)+'</td>'
-        +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+'</td>'
+        +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+(rsTrend?' '+rsTrend:'')+'</td>'
         +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span></td>'
         +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
-        +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
+        +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+(rvolTrend?' '+rvolTrend:'')+'</td>'
         +'<td>'+cfH+'</td>'
+        +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
+        +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
         +'<td class="left">'+insH+'</td>'
         +'<td class="left">'+earnH+'</td></tr>';
     }).join('');

@@ -192,6 +192,225 @@ def _batch_above_50ma(tickers: list[str], as_of: str, conn) -> dict[str, bool]:
     return result
 
 
+def _batch_rvol_trend(tickers: list[str], as_of: str, conn) -> dict[str, str]:
+    """RVOL direction arrow per ticker: compares today_rvol vs 5d-ago rvol."""
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, volume, rn
+        FROM (
+            SELECT ticker, volume,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 26
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, vol, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(vol) if vol is not None else 0.0))
+    result: dict[str, str] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        vols = [v for _, v in series]
+        if len(vols) < 21:
+            result[tkr] = "—"
+            continue
+        today_avg = sum(vols[1:21]) / 20
+        if today_avg == 0:
+            result[tkr] = "—"
+            continue
+        today_rvol = vols[0] / today_avg
+        if len(vols) < 26:
+            result[tkr] = "→"
+            continue
+        ago_avg = sum(vols[6:26]) / 20
+        if ago_avg == 0:
+            result[tkr] = "→"
+            continue
+        ago_rvol = vols[5] / ago_avg
+        if today_rvol > ago_rvol * 1.10:
+            result[tkr] = "↑"
+        elif today_rvol < ago_rvol * 0.90:
+            result[tkr] = "↓"
+        else:
+            result[tkr] = "→"
+    return result
+
+
+def _batch_rs_trend(
+    ticker_parent_pairs: list[tuple[str, str]], as_of: str, conn
+) -> dict[tuple[str, str], str]:
+    """RS direction arrow per (ticker, parent): compares today's raw RS vs yesterday's."""
+    if not ticker_parent_pairs:
+        return {}
+    all_syms = list({t for t, _ in ticker_parent_pairs} | {p for _, p in ticker_parent_pairs})
+    placeholders = ", ".join(["?" for _ in all_syms])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn
+        FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 22
+        """,
+        all_syms + [as_of],
+    ).fetchall()
+    closes: dict[str, list] = {}
+    for tkr, c, rn in rows:
+        if tkr not in closes:
+            closes[tkr] = [None] * 22
+        if rn <= 22:
+            closes[tkr][rn - 1] = float(c)
+
+    def _rs(cc: list, pc: list, i: int) -> float:
+        if cc[i] is None or cc[i + 20] is None or pc[i] is None or pc[i + 20] is None:
+            return float("nan")
+        if cc[i + 20] == 0 or pc[i + 20] == 0:
+            return float("nan")
+        return (cc[i] - cc[i + 20]) / cc[i + 20] - (pc[i] - pc[i + 20]) / pc[i + 20]
+
+    result: dict[tuple[str, str], str] = {}
+    for ticker, parent in ticker_parent_pairs:
+        cc = closes.get(ticker, [None] * 22)
+        pc = closes.get(parent, [None] * 22)
+        today_rs = _rs(cc, pc, 0)
+        yest_rs = _rs(cc, pc, 1)
+        if math.isnan(today_rs) or math.isnan(yest_rs):
+            result[(ticker, parent)] = "—"
+        elif today_rs > yest_rs + 0.01:
+            result[(ticker, parent)] = "↑"
+        elif today_rs < yest_rs - 0.01:
+            result[(ticker, parent)] = "↓"
+        else:
+            result[(ticker, parent)] = "→"
+    return result
+
+
+def _batch_days_above_50ma_count(tickers: list[str], as_of: str, conn) -> dict[str, int]:
+    """Consecutive trading days from today back where close > 50d MA."""
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn
+        FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 101
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, c, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(c)))
+    result: dict[str, int] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        closes = [c for _, c in series]
+        if len(closes) < 51:
+            result[tkr] = 0
+            continue
+        streak = 0
+        for i in range(min(51, len(closes) - 50)):
+            ma50 = sum(closes[i + 1 : i + 51]) / 50
+            if closes[i] > ma50:
+                streak += 1
+            else:
+                break
+        result[tkr] = streak
+    return result
+
+
+def _batch_price_range_pct(tickers: list[str], as_of: str, conn) -> dict[str, float]:
+    """Position within 20-day high-low range as a 0–100 float."""
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn
+        FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 20
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, c, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(c)))
+    result: dict[str, float] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        closes = [c for _, c in series]
+        if len(closes) < 20:
+            result[tkr] = float("nan")
+            continue
+        today_close = closes[0]
+        low_20d = min(closes)
+        high_20d = max(closes)
+        if high_20d == low_20d:
+            result[tkr] = float("nan")
+            continue
+        result[tkr] = (today_close - low_20d) / (high_20d - low_20d) * 100
+    return result
+
+
+def _fmt_rvol_trend(v: float, trend: str) -> str:
+    base = _fmt_rvol(v)
+    if trend == "↑":
+        return f"{base} [green]↑[/green]"
+    if trend == "↓":
+        return f"{base} [red]↓[/red]"
+    if trend == "→":
+        return f"{base} [dim]→[/dim]"
+    return base
+
+
+def _fmt_rs_with_trend(s: float, trend: str) -> str:
+    if trend == "↑":
+        arrow = "[green]↑[/green]"
+    elif trend == "↓":
+        arrow = "[red]↓[/red]"
+    elif trend == "→":
+        arrow = "[dim]→[/dim]"
+    else:
+        arrow = "[dim]—[/dim]"
+    return f"{s:+.4f} {arrow}"
+
+
+def _fmt_days_above_50ma(days: int) -> str:
+    if days == 0:
+        return "[dim]—[/dim]"
+    return f"[green]{days}d[/green]"
+
+
+def _fmt_price_range_pct(pct: float) -> str:
+    if math.isnan(pct):
+        return "[dim]—[/dim]"
+    pct_int = round(pct)
+    if pct >= 70:
+        return f"[green]{pct_int}%[/green]"
+    if pct >= 30:
+        return f"[yellow]{pct_int}%[/yellow]"
+    return f"[red]{pct_int}%[/red]"
+
+
 def _fmt_confirm(score: int, max_score: int) -> str:
     pct = score / max_score if max_score > 0 else 0
     if pct >= 0.8:
@@ -659,6 +878,13 @@ def scan(
     # Batch-load above-50d-MA flag for all dependent tickers.
     above_50ma_flags: dict[str, bool] = _batch_above_50ma(all_scan_tickers, as_of, conn)
 
+    # Batch-load new signal indicators.
+    rvol_trend_flags: dict[str, str] = _batch_rvol_trend(all_scan_tickers, as_of, conn)
+    ticker_parent_pairs = [(t, p) for p, scored in per_parent.items() for t, _ in scored]
+    rs_trend_flags: dict[tuple[str, str], str] = _batch_rs_trend(ticker_parent_pairs, as_of, conn)
+    days_50ma_counts: dict[str, int] = _batch_days_above_50ma_count(all_scan_tickers, as_of, conn)
+    price_range_pcts: dict[str, float] = _batch_price_range_pct(all_scan_tickers, as_of, conn)
+
     # Pre-compute insider summaries for all tickers in scope (one pass, reused across tables).
     insider_summaries: dict[str, dict] = {}
     if show_insiders:
@@ -717,13 +943,15 @@ def scan(
         table.add_column("Ticker", width=7)
         table.add_column("Parent", width=7)
         table.add_column("Price", justify="right", width=10)
-        table.add_column("RS Score", justify="right", width=10)
+        table.add_column("RS Score", justify="right", width=12)
         table.add_column("Action", width=18)
         table.add_column("Rank", justify="right", width=10)
         if show_estimates:
             table.add_column("Est Rev", justify="right", width=9)
-        table.add_column("RVOL", justify="right", width=12)
+        table.add_column("RVOL", justify="right", width=16)
         table.add_column("Confirm", justify="right", width=9)
+        table.add_column("50MA", justify="right", width=6)
+        table.add_column("Range", justify="right", width=8)
         if show_insiders:
             table.add_column("Insiders (30d)", width=14)
 
@@ -781,11 +1009,15 @@ def scan(
                 above_50ma=above_50ma,
             )
 
-            base_cells = [ticker, _parent, price_cell, f"{s:+.4f}", action_cell, f"({rank}/{total})"]
+            rs_trend_val = rs_trend_flags.get((ticker, _parent), "—")
+            rvol_trend_val = rvol_trend_flags.get(ticker, "—")
+            base_cells = [ticker, _parent, price_cell, _fmt_rs_with_trend(s, rs_trend_val), action_cell, f"({rank}/{total})"]
             if show_estimates:
                 base_cells.append(_fmt_revision(rev_score_val))
-            base_cells.append(_fmt_rvol(rvol_val))
+            base_cells.append(_fmt_rvol_trend(rvol_val, rvol_trend_val))
             base_cells.append(_fmt_confirm(confirm_score, 5))
+            base_cells.append(_fmt_days_above_50ma(days_50ma_counts.get(ticker, 0)))
+            base_cells.append(_fmt_price_range_pct(price_range_pcts.get(ticker, float("nan"))))
             if show_insiders:
                 base_cells.append(_fmt_insider(ins))
             table.add_row(*base_cells)
@@ -880,6 +1112,10 @@ def scan_megacap() -> None:
     earnings_next_dates_mc: dict[str, object] = {}
     has_insider_data = False
     _rot_mc = None
+    rvol_trend_mc: dict[str, str] = {}
+    rs_trend_mc: dict[tuple[str, str], str] = {}
+    days_50ma_mc: dict[str, int] = {}
+    range_pct_mc: dict[str, float] = {}
     try:
         insider_row_count = _conn.execute("SELECT COUNT(*) FROM insider_transactions").fetchone()[0]
         has_insider_data = insider_row_count > 0
@@ -911,6 +1147,12 @@ def scan_megacap() -> None:
             _rot_mc = _compute_rot_mc(as_of_str, _conn)
         except Exception:
             pass
+
+        mc_tickers_list = [r.ticker for r in results]
+        rvol_trend_mc = _batch_rvol_trend(mc_tickers_list, as_of_str, _conn)
+        rs_trend_mc = _batch_rs_trend([(r.ticker, "QQQ") for r in results], as_of_str, _conn)
+        days_50ma_mc = _batch_days_above_50ma_count(mc_tickers_list, as_of_str, _conn)
+        range_pct_mc = _batch_price_range_pct(mc_tickers_list, as_of_str, _conn)
     finally:
         _conn.close()
 
@@ -920,14 +1162,16 @@ def scan_megacap() -> None:
     table.add_column("Rank", justify="right", width=6)
     table.add_column("Ticker", width=7)
     table.add_column("Price", justify="right", width=11)
-    table.add_column("RS-20", justify="right", width=9)
+    table.add_column("RS-20", justify="right", width=12)
     table.add_column("RS-60", justify="right", width=9)
     table.add_column("RS-120", justify="right", width=9)
     table.add_column("Trend", justify="right", width=7)
     table.add_column("Vol Conv", justify="right", width=10)
     table.add_column("Est Rev", justify="right", width=9)
-    table.add_column("RVOL", justify="right", width=12)
+    table.add_column("RVOL", justify="right", width=16)
     table.add_column("Confirm", justify="right", width=9)
+    table.add_column("50MA", justify="right", width=6)
+    table.add_column("Range", justify="right", width=8)
     table.add_column("Hist Pct", justify="right", width=10)
     table.add_column("Score", justify="right", width=8)
     table.add_column("Label", width=12)
@@ -953,7 +1197,7 @@ def scan_megacap() -> None:
 
         rev_score = revision_scores.get(r.ticker)
         rev_cell = _fmt_revision(rev_score)
-        rvol_cell = _fmt_rvol(r.rvol)
+        rvol_cell = _fmt_rvol_trend(r.rvol, rvol_trend_mc.get(r.ticker, "—"))
 
         ins_summary = insider_summaries_mc.get(r.ticker, {})
         insider_buying = ins_summary.get("buy_count", 0) > 0
@@ -965,6 +1209,10 @@ def scan_megacap() -> None:
             trend_raw=r.trend_raw,
         )
         confirm_cell = _fmt_confirm(confirm_score, 5)
+
+        rs20_trend = rs_trend_mc.get((r.ticker, "QQQ"), "—")
+        days_50ma_cell = _fmt_days_above_50ma(days_50ma_mc.get(r.ticker, 0))
+        range_pct_cell = _fmt_price_range_pct(range_pct_mc.get(r.ticker, float("nan")))
 
         nd = earnings_next_dates_mc.get(r.ticker)
         days_out: int | None = None
@@ -982,9 +1230,10 @@ def scan_megacap() -> None:
 
         table.add_row(
             str(r.rank), r.ticker, price_str,
-            _fmt_rs(r.rs_20), _fmt_rs(r.rs_60), _fmt_rs(r.rs_120),
-            trend_cell, vol_cell, rev_cell, rvol_cell, confirm_cell, hist_cell,
-            score_cell, label_cell, earnings_cell,
+            _fmt_rs_with_trend(r.rs_20, rs20_trend), _fmt_rs(r.rs_60), _fmt_rs(r.rs_120),
+            trend_cell, vol_cell, rev_cell, rvol_cell, confirm_cell,
+            days_50ma_cell, range_pct_cell,
+            hist_cell, score_cell, label_cell, earnings_cell,
         )
 
     console.print(table)

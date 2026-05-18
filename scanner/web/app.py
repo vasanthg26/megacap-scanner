@@ -130,6 +130,181 @@ def _batch_above_50ma(tickers: list[str], as_of: str, conn) -> dict[str, bool]:
     return result
 
 
+def _batch_rvol_trend(tickers: list[str], as_of: str, conn) -> dict[str, str]:
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, volume, rn
+        FROM (
+            SELECT ticker, volume,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 26
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, vol, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(vol) if vol is not None else 0.0))
+    result: dict[str, str] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        vols = [v for _, v in series]
+        if len(vols) < 21:
+            result[tkr] = "—"
+            continue
+        today_avg = sum(vols[1:21]) / 20
+        if today_avg == 0:
+            result[tkr] = "—"
+            continue
+        today_rvol = vols[0] / today_avg
+        if len(vols) < 26:
+            result[tkr] = "→"
+            continue
+        ago_avg = sum(vols[6:26]) / 20
+        if ago_avg == 0:
+            result[tkr] = "→"
+            continue
+        ago_rvol = vols[5] / ago_avg
+        if today_rvol > ago_rvol * 1.10:
+            result[tkr] = "↑"
+        elif today_rvol < ago_rvol * 0.90:
+            result[tkr] = "↓"
+        else:
+            result[tkr] = "→"
+    return result
+
+
+def _batch_rs_trend(
+    ticker_parent_pairs: list[tuple[str, str]], as_of: str, conn
+) -> dict[tuple[str, str], str]:
+    if not ticker_parent_pairs:
+        return {}
+    all_syms = list({t for t, _ in ticker_parent_pairs} | {p for _, p in ticker_parent_pairs})
+    placeholders = ", ".join(["?" for _ in all_syms])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn
+        FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 22
+        """,
+        all_syms + [as_of],
+    ).fetchall()
+    closes: dict[str, list] = {}
+    for tkr, c, rn in rows:
+        if tkr not in closes:
+            closes[tkr] = [None] * 22
+        if rn <= 22:
+            closes[tkr][rn - 1] = float(c)
+
+    def _rs(cc: list, pc: list, i: int) -> float:
+        if cc[i] is None or cc[i + 20] is None or pc[i] is None or pc[i + 20] is None:
+            return float("nan")
+        if cc[i + 20] == 0 or pc[i + 20] == 0:
+            return float("nan")
+        return (cc[i] - cc[i + 20]) / cc[i + 20] - (pc[i] - pc[i + 20]) / pc[i + 20]
+
+    result: dict[tuple[str, str], str] = {}
+    for ticker, parent in ticker_parent_pairs:
+        cc = closes.get(ticker, [None] * 22)
+        pc = closes.get(parent, [None] * 22)
+        today_rs = _rs(cc, pc, 0)
+        yest_rs = _rs(cc, pc, 1)
+        if math.isnan(today_rs) or math.isnan(yest_rs):
+            result[(ticker, parent)] = "—"
+        elif today_rs > yest_rs + 0.01:
+            result[(ticker, parent)] = "↑"
+        elif today_rs < yest_rs - 0.01:
+            result[(ticker, parent)] = "↓"
+        else:
+            result[(ticker, parent)] = "→"
+    return result
+
+
+def _batch_days_above_50ma_count(tickers: list[str], as_of: str, conn) -> dict[str, int]:
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn
+        FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 101
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, c, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(c)))
+    result: dict[str, int] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        closes = [c for _, c in series]
+        if len(closes) < 51:
+            result[tkr] = 0
+            continue
+        streak = 0
+        for i in range(min(51, len(closes) - 50)):
+            ma50 = sum(closes[i + 1 : i + 51]) / 50
+            if closes[i] > ma50:
+                streak += 1
+            else:
+                break
+        result[tkr] = streak
+    return result
+
+
+def _batch_price_range_pct(tickers: list[str], as_of: str, conn) -> dict[str, float]:
+    if not tickers:
+        return {}
+    placeholders = ", ".join(["?" for _ in tickers])
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn
+        FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t
+        WHERE rn <= 20
+        """,
+        tickers + [as_of],
+    ).fetchall()
+    by_ticker: dict[str, list[tuple[int, float]]] = {}
+    for tkr, c, rn in rows:
+        by_ticker.setdefault(tkr, []).append((rn, float(c)))
+    result: dict[str, float] = {}
+    for tkr, series in by_ticker.items():
+        series.sort(key=lambda x: x[0])
+        closes = [c for _, c in series]
+        if len(closes) < 20:
+            result[tkr] = float("nan")
+            continue
+        today_close = closes[0]
+        low_20d = min(closes)
+        high_20d = max(closes)
+        if high_20d == low_20d:
+            result[tkr] = float("nan")
+            continue
+        result[tkr] = (today_close - low_20d) / (high_20d - low_20d) * 100
+    return result
+
+
 def _insider_category(summary: dict) -> str:
     if not summary:
         return "none"
@@ -234,6 +409,11 @@ def _compute_scan_sync(scan_date: str) -> dict:
 
         rvol_scores = _batch_rvol(all_tickers, scan_date, conn)
         above_50ma_flags = _batch_above_50ma(all_tickers, scan_date, conn)
+        rvol_trend_flags = _batch_rvol_trend(all_tickers, scan_date, conn)
+        ticker_parent_pairs = [(t, p) for p, scored in per_parent.items() for t, _ in scored]
+        rs_trend_flags = _batch_rs_trend(ticker_parent_pairs, scan_date, conn)
+        days_50ma_counts = _batch_days_above_50ma_count(all_tickers, scan_date, conn)
+        price_range_pcts = _batch_price_range_pct(all_tickers, scan_date, conn)
 
         insider_summaries: dict[str, dict] = {}
         if show_insiders:
@@ -324,6 +504,10 @@ def _compute_scan_sync(scan_date: str) -> dict:
                         "above_50ma": above_50ma,
                         "section": section,
                         "earnings_days": _earnings_days(ticker),
+                        "rvol_trend": rvol_trend_flags.get(ticker, "—"),
+                        "rs_trend": rs_trend_flags.get((ticker, parent), "—"),
+                        "days_above_50ma": days_50ma_counts.get(ticker, 0),
+                        "price_range_pct": _nan_to_none(price_range_pcts.get(ticker, float("nan"))),
                     })
 
             groups.append({
@@ -384,6 +568,12 @@ def _compute_scan_megacap_sync() -> dict:
                     earnings_next_dates_mc[tkr] = nd
         except Exception as exc:
             logger.warning("megacap earnings date batch load failed: %s", exc)
+
+        mc_tickers_list = [r.ticker for r in results]
+        rvol_trend_mc = _batch_rvol_trend(mc_tickers_list, as_of_str, conn)
+        rs_trend_mc = _batch_rs_trend([(r.ticker, "QQQ") for r in results], as_of_str, conn)
+        days_50ma_mc = _batch_days_above_50ma_count(mc_tickers_list, as_of_str, conn)
+        range_pct_mc = _batch_price_range_pct(mc_tickers_list, as_of_str, conn)
     finally:
         conn.close()
 
@@ -428,6 +618,10 @@ def _compute_scan_megacap_sync() -> dict:
             "insider_annotation": _insider_category(ins),
             "headlines": headlines,
             "earnings_days": _mc_earnings_days(r.ticker),
+            "rvol_trend": rvol_trend_mc.get(r.ticker, "—"),
+            "rs_trend": rs_trend_mc.get((r.ticker, "QQQ"), "—"),
+            "days_above_50ma": days_50ma_mc.get(r.ticker, 0),
+            "price_range_pct": _nan_to_none(range_pct_mc.get(r.ticker, float("nan"))),
         })
 
     return {"as_of": as_of_str, "rankings": rows}
