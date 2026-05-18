@@ -760,6 +760,17 @@ async def api_run_cleanup_filings():
     return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
 
 
+@app.get("/api/admin/clear-all-filings")
+def clear_all_filings():
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM filings_8k")
+    finally:
+        conn.close()
+    return {"status": "cleared"}
+
+
 @app.get("/api/admin/clear-high-filings")
 def clear_high_filings():
     from scanner.db import get_connection
