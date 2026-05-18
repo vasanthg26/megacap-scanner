@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 _cache: dict[str, tuple[Any, datetime]] = {}
 _CACHE_TTL_SECONDS = 600  # 10 minutes
 
+# Bump when new fields are added to scan results — forces DB cache invalidation
+_SCAN_SCHEMA_VERSION = 2
+
 
 def _cache_get(key: str) -> Any | None:
     entry = _cache.get(key)
@@ -524,6 +527,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
             "show_insiders": show_insiders,
             "show_estimates": show_estimates,
             "groups": groups,
+            "schema_version": _SCAN_SCHEMA_VERSION,
         }
     finally:
         conn.close()
@@ -805,7 +809,7 @@ def root():
 
 
 def _read_scan_from_db(scan_date: str) -> dict | None:
-    """Read a persisted scan result from DuckDB. Returns None if not found."""
+    """Read a persisted scan result from DuckDB. Returns None if not found or schema is stale."""
     import json
     from scanner.db import get_connection
     try:
@@ -818,7 +822,11 @@ def _read_scan_from_db(scan_date: str) -> dict | None:
         finally:
             conn.close()
         if row:
-            return json.loads(row[0])
+            data = json.loads(row[0])
+            if data.get("schema_version", 0) < _SCAN_SCHEMA_VERSION:
+                logger.info("Scan DB result for %s is schema v%s, recomputing", scan_date, data.get("schema_version", 0))
+                return None
+            return data
     except Exception as exc:
         logger.warning("Failed to read scan result from DB for %s: %s", scan_date, exc)
     return None
