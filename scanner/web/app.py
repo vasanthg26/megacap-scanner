@@ -760,6 +760,47 @@ async def api_run_cleanup_filings():
     return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
 
 
+@app.get("/api/admin/generate-summaries")
+async def generate_summaries():
+    from scanner.ingest.filings import _fetch_filing_text, _generate_summary, _make_session
+    from scanner.db import get_connection
+
+    def _run() -> int:
+        session = _make_session()
+        conn = get_connection()
+        try:
+            filings = conn.execute("""
+                SELECT id, ticker, filing_url, item_numbers, title
+                FROM filings_8k
+                WHERE summary IS NULL
+                AND filing_url IS NOT NULL
+                ORDER BY filed_date DESC
+                LIMIT 20
+            """).fetchall()
+            count = 0
+            for filing in filings:
+                id_, ticker, url, item_numbers, title = filing
+                try:
+                    text = _fetch_filing_text(url, session)
+                    if text:
+                        summary = _generate_summary(item_numbers or "", title, text)
+                        if summary:
+                            conn.execute(
+                                "UPDATE filings_8k SET summary = ? WHERE id = ?",
+                                [summary, id_],
+                            )
+                            count += 1
+                except Exception as exc:
+                    logger.error("generate-summaries: filing %s failed: %s", id_, exc)
+        finally:
+            session.close()
+            conn.close()
+        return count
+
+    count = await asyncio.to_thread(_run)
+    return {"status": "complete", "summaries_generated": count}
+
+
 @app.get("/api/admin/reingest-filings-14d")
 async def reingest_filings_14d():
     from scanner.db import get_connection
