@@ -959,7 +959,7 @@ function renderActivityLog(entries){
       +'</div>';
   }).join('');
 }
-var _JOB_ENDPOINTS={'ingest':'/api/run/ingest','ingest-estimates':'/api/run/ingest-estimates','ingest-insiders':'/api/run/ingest-insiders','ingest-earnings':'/api/run/ingest-earnings','ingest-filings':'/api/run/ingest-filings','cleanup-filings':'/api/run/cleanup-filings'};
+var _JOB_ENDPOINTS={'ingest':'/api/run/ingest','ingest-estimates':'/api/run/ingest-estimates','ingest-insiders':'/api/run/ingest-insiders','ingest-earnings':'/api/run/ingest-earnings','ingest-filings':'/api/run/ingest-filings','cleanup-filings':'/api/run/cleanup-filings','run-scan':'/api/run/run-scan'};
 function renderScheduler(data){
   var tbody=document.getElementById('sched-tbody'),jobs=data.jobs||data;
   if(!Array.isArray(jobs)||!jobs.length){tbody.innerHTML='<tr><td colspan="4" style="color:var(--dim);padding:12px 14px;">No jobs configured</td></tr>';return;}
@@ -1866,7 +1866,7 @@ document.getElementById('refresh-btn').addEventListener('click',refreshAll);
 
 /* ── Refresh All Jobs ─────────────────── */
 var _refreshAllRunning=false;
-var _REFRESH_ALL_SEQUENCE=['ingest','ingest-estimates','ingest-earnings','ingest-filings','ingest-insiders'];
+var _REFRESH_ALL_SEQUENCE=['ingest','ingest-estimates','ingest-earnings','ingest-filings','ingest-insiders','run-scan'];
 
 async function runRefreshAll(){
   if(_refreshAllRunning)return;

@@ -14,12 +14,14 @@ scheduler_status: dict[str, Any] = {
     "last_earnings": None,
     "last_filings": None,
     "last_cleanup": None,
+    "last_scan": None,
     "last_ingest_ok": None,
     "last_estimates_ok": None,
     "last_insiders_ok": None,
     "last_earnings_ok": None,
     "last_filings_ok": None,
     "last_cleanup_ok": None,
+    "last_scan_ok": None,
 }
 
 # Module-level reference set by lifespan so api_status can query it.
@@ -39,6 +41,7 @@ _JOB_META = {
     "ingest_earnings":  ("ingest-earnings",   "last_earnings",   "last_earnings_ok"),
     "ingest_filings":   ("ingest-filings",    "last_filings",    "last_filings_ok"),
     "cleanup_filings":  ("cleanup-filings",   "last_cleanup",    "last_cleanup_ok"),
+    "run_scan":         ("run-scan",          "last_scan",       "last_scan_ok"),
 }
 
 
@@ -310,6 +313,36 @@ def _job_filings() -> None:
         _write_activity_log("ingest-filings", "error", str(exc)[:200])
 
 
+def _job_scan() -> None:
+    from scanner.db import get_connection
+    from scanner.web.app import _run_scan_today_sync
+
+    logger.info("Scheduled job: scan computation starting")
+    try:
+        conn = get_connection()
+        try:
+            latest_row = conn.execute("SELECT MAX(date) FROM prices").fetchone()
+        finally:
+            conn.close()
+        latest_date = str(latest_row[0]) if latest_row and latest_row[0] else None
+        if not latest_date:
+            logger.warning("Scan job: no price data in DB — skipping")
+            scheduler_status["last_scan_ok"] = False
+            scheduler_status["last_scan"] = datetime.utcnow().isoformat()
+            _write_activity_log("run-scan", "error", "no price data")
+            return
+        _run_scan_today_sync(as_of=latest_date)
+        scheduler_status["last_scan_ok"] = True
+        scheduler_status["last_scan"] = datetime.utcnow().isoformat()
+        logger.info("Scheduled scan complete for %s", latest_date)
+        _write_activity_log("run-scan", "success", f"scan computed for {latest_date}")
+    except Exception as exc:
+        scheduler_status["last_scan"] = datetime.utcnow().isoformat()
+        scheduler_status["last_scan_ok"] = False
+        logger.error("Scan job failed: %s", exc)
+        _write_activity_log("run-scan", "error", str(exc)[:200])
+
+
 def create_scheduler():
     """Create and return a configured AsyncIOScheduler."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -368,6 +401,15 @@ def create_scheduler():
         CronTrigger(day_of_week="mon", hour=9, minute=25, timezone="America/New_York"),
         id="cleanup_filings",
         name="cleanup-filings",
+        replace_existing=True,
+    )
+
+    # Daily 9:30 AM ET — scan computation (after all ingestion is complete)
+    scheduler.add_job(
+        _job_scan,
+        CronTrigger(hour=9, minute=30, timezone="America/New_York"),
+        id="run_scan",
+        name="run-scan",
         replace_existing=True,
     )
 

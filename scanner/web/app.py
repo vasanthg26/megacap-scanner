@@ -760,6 +760,15 @@ async def api_run_cleanup_filings():
     return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
 
 
+@app.post("/api/run/run-scan")
+async def api_run_scan():
+    from scanner.web.scheduler import _job_scan, scheduler_status
+    await asyncio.to_thread(_job_scan)
+    if scheduler_status.get("last_scan_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Scan job failed — check server logs"}
+
+
 @app.post("/api/run/all")
 async def api_run_all():
     from scanner.web.scheduler import (
