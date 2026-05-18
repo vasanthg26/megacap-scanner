@@ -1347,6 +1347,14 @@ def debug():
         ).fetchall()
         current_date = conn.execute("SELECT CURRENT_DATE").fetchone()[0]
         filings_count = conn.execute("SELECT COUNT(*) FROM filings_8k").fetchone()[0]
+        high_filings_rows = conn.execute("""
+            SELECT ticker, filed_date, impact,
+                   summary IS NOT NULL AS has_summary,
+                   summary
+            FROM filings_8k
+            WHERE impact = 'HIGH'
+            ORDER BY filed_date DESC
+        """).fetchall()
     finally:
         conn.close()
     return {
@@ -1359,6 +1367,16 @@ def debug():
         "scan_results_count": scan_res,
         "filings_count": filings_count,
         "anthropic_key_set": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "high_filings": [
+            {
+                "ticker": r[0],
+                "filed_date": str(r[1]),
+                "impact": r[2],
+                "has_summary": r[3],
+                "summary": r[4],
+            }
+            for r in high_filings_rows
+        ],
         "scan_result": {
             "scan_date": str(scan_row[0]),
             "computed_at": str(scan_row[1]),
