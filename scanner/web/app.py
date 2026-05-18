@@ -577,6 +577,12 @@ def _warm_caches_sync() -> None:
 async def lifespan(app: FastAPI):
     from scanner.web.scheduler import create_scheduler, set_scheduler
 
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        logger.info("ANTHROPIC_API_KEY: SET")
+    else:
+        logger.warning("ANTHROPIC_API_KEY: NOT SET")
+
     scheduler = create_scheduler()
     set_scheduler(scheduler)
     scheduler.start()

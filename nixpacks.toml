@@ -1,0 +1,8 @@
+[variables]
+PYTHONUNBUFFERED = "1"
+
+[phases.build]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "uvicorn scanner.web.app:app --host 0.0.0.0 --port $PORT"
