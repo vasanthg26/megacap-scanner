@@ -1328,6 +1328,7 @@ def debug():
             """
         ).fetchall()
         current_date = conn.execute("SELECT CURRENT_DATE").fetchone()[0]
+        filings_count = conn.execute("SELECT COUNT(*) FROM filings_8k").fetchone()[0]
     finally:
         conn.close()
     return {
@@ -1338,6 +1339,7 @@ def debug():
         "prices_count": prices,
         "scheduler_runs_count": sched,
         "scan_results_count": scan_res,
+        "filings_count": filings_count,
         "scan_result": {
             "scan_date": str(scan_row[0]),
             "computed_at": str(scan_row[1]),
