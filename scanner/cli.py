@@ -374,23 +374,23 @@ def _batch_price_range_pct(tickers: list[str], as_of: str, conn) -> dict[str, fl
 def _fmt_rvol_trend(v: float, trend: str) -> str:
     base = _fmt_rvol(v)
     if trend == "↑":
-        return f"{base} [green]↑[/green]"
+        return f"{base} [green](+)[/green]"
     if trend == "↓":
-        return f"{base} [red]↓[/red]"
+        return f"{base} [red](-)[/red]"
     if trend == "→":
-        return f"{base} [dim]→[/dim]"
+        return f"{base} [dim](=)[/dim]"
     return base
 
 
 def _fmt_rs_with_trend(s: float, trend: str) -> str:
     if trend == "↑":
-        arrow = "[green]↑[/green]"
+        arrow = "[green](+)[/green]"
     elif trend == "↓":
-        arrow = "[red]↓[/red]"
+        arrow = "[red](-)[/red]"
     elif trend == "→":
-        arrow = "[dim]→[/dim]"
+        arrow = "[dim](=)[/dim]"
     else:
-        arrow = "[dim]—[/dim]"
+        arrow = "[dim]--[/dim]"
     return f"{s:+.4f} {arrow}"
 
 
