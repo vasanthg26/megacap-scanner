@@ -308,7 +308,7 @@ def generate_signal_explanation(
     try:
         s_msg = sonnet.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=200,
+            max_tokens=350,
             messages=[{
                 "role": "user",
                 "content": (

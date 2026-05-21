@@ -1090,6 +1090,7 @@ async def generate_explanations():
                 return {"error": "No scan results found"}
             scan_date = str(row[0])
             data = _json.loads(row[1])
+            conn.execute("DELETE FROM signal_explanations WHERE scan_date = CURRENT_DATE")
             groups = data.get("groups", [])
             results = []
             for grp in groups:
