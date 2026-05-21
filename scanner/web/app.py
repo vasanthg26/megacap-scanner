@@ -1081,6 +1081,15 @@ async def generate_explanations():
     import json as _json
 
     def _run():
+        # Step 1: delete all existing explanations before regenerating
+        conn_del = get_connection()
+        try:
+            conn_del.execute("DELETE FROM signal_explanations")
+            logger.info("generate-explanations: deleted all cached signal explanations")
+        finally:
+            conn_del.close()
+
+        # Step 2: generate fresh explanations
         conn = get_connection()
         try:
             row = conn.execute(
@@ -1090,8 +1099,6 @@ async def generate_explanations():
                 return {"error": "No scan results found"}
             scan_date = str(row[0])
             data = _json.loads(row[1])
-            deleted = conn.execute("DELETE FROM signal_explanations").fetchone()
-            logger.info("Cleared all cached signal explanations before regenerating")
             groups = data.get("groups", [])
             results = []
             for grp in groups:

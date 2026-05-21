@@ -305,21 +305,20 @@ def generate_signal_explanation(
         logger.warning("Haiku signal formatting failed for %s: %s", ticker, exc)
         bullets = facts_input
 
+    sonnet_prompt = (
+        f"Write exactly 3 bullet points (max 150 words total) explaining why {ticker} "
+        f"shows a {action_label} signal relative to its parent {parent}. "
+        f"Use these metrics:\n{bullets}\n\n"
+        f"Each bullet: 1-2 sentences. No labels, no numbering, no 'Paragraph X:' prefix. "
+        f"Start each bullet with •. Cover: RS/momentum, confirmation/volume, risks/caveats. "
+        f"Plain text only, no markdown."
+    )
+    logger.info("signal_explanation prompt[%s]: %.200s", ticker, sonnet_prompt)
     try:
         s_msg = sonnet.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=500,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Write exactly 3 bullet points (max 150 words total) explaining why {ticker} "
-                    f"shows a {action_label} signal relative to its parent {parent}. "
-                    f"Use these metrics:\n{bullets}\n\n"
-                    f"Each bullet: 1-2 sentences. No labels, no numbering, no 'Paragraph X:' prefix. "
-                    f"Start each bullet with •. Cover: RS/momentum, confirmation/volume, risks/caveats. "
-                    f"Plain text only, no markdown."
-                ),
-            }],
+            messages=[{"role": "user", "content": sonnet_prompt}],
         )
         explanation = s_msg.content[0].text.strip() if s_msg.content else None
     except Exception as exc:
