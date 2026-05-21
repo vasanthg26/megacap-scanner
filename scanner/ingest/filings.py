@@ -117,7 +117,7 @@ def _fetch_filing_text(url: str, session: requests.Session) -> str | None:
 
 
 def generate_filing_analysis(
-    item_labels: str, title: str | None, filing_text: str | None
+    item_labels: str, title: str | None, filing_text: str | None, ticker: str = ""
 ) -> tuple[str | None, str | None, str | None]:
     """Two-model cascade: Haiku extracts facts, Sonnet returns JSON {summary, sentiment, impact}.
 
@@ -149,13 +149,18 @@ def generate_filing_analysis(
         return None, None, None
 
     try:
+        company = ticker.upper() if ticker else "the company"
         sonnet_prompt = (
-            f"Analyze this SEC 8-K filing based on these extracted facts:\n{facts}\n\n"
-            f"Return ONLY a JSON object with exactly these keys:\n"
-            f'- "summary": one sentence max 20 words describing what happened\n'
-            f'- "sentiment": one of POSITIVE, NEGATIVE, or NEUTRAL\n'
-            f'- "impact": one sentence max 20 words explaining investor impact\n\n'
-            f"JSON only, no markdown fences."
+            f"Analyze this SEC 8-K filing event. Respond in JSON only, no preamble, no markdown.\n\n"
+            f"Company: {company}\n"
+            f"Filing type: {item_labels}\n"
+            f"Key facts extracted:\n{facts}\n\n"
+            f'{{\n'
+            f'  "summary": "1-2 sentences: what happened, include {company} and specific details",\n'
+            f'  "sentiment": "POSITIVE or NEGATIVE or NEUTRAL",\n'
+            f'  "impact": "1-2 sentences specific to {company} and this event — not generic. '
+            f'Explain the actual business impact for investors."\n'
+            f'}}'
         )
         s_msg = sonnet.messages.create(
             model="claude-sonnet-4-6",
@@ -463,7 +468,7 @@ def ingest_filings(
                                 if i.strip()
                             )
                             summary, sentiment, impact_explanation = generate_filing_analysis(
-                                item_labels, f["title"], filing_text
+                                item_labels, f["title"], filing_text, ticker
                             )
                             time.sleep(0.5)
 

@@ -1001,7 +1001,7 @@ def generate_summaries():
                     for i in (item_numbers or "").split(",")
                     if i.strip()
                 )
-                summary, sentiment, impact_explanation = generate_filing_analysis(item_labels, title, text)
+                summary, sentiment, impact_explanation = generate_filing_analysis(item_labels, title, text, ticker)
                 if summary:
                     conn.execute(
                         "UPDATE filings_8k SET summary=?, sentiment=?, impact_explanation=? WHERE id=?",
@@ -1054,7 +1054,7 @@ def generate_sentiments():
                     for i in (item_numbers or "").split(",")
                     if i.strip()
                 )
-                _, sentiment, impact_explanation = generate_filing_analysis(item_labels, title, text)
+                _, sentiment, impact_explanation = generate_filing_analysis(item_labels, title, text, ticker)
                 if sentiment:
                     conn.execute(
                         "UPDATE filings_8k SET sentiment=?, impact_explanation=? WHERE id=?",
