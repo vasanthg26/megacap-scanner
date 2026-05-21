@@ -326,6 +326,18 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
   100% { background: transparent; }
 }
 .j-saved { animation: j-flash 0.8s ease-out; }
+.j-note-cell { max-width: 200px; }
+.j-note-display { display: flex; align-items: flex-start; gap: 4px; }
+.j-note-text { white-space: normal; word-wrap: break-word; overflow-wrap: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-style: italic; color: var(--muted); font-size: 11px; min-width: 0; flex: 1; }
+.j-note-text:empty { display: none; }
+.j-note-empty { color: var(--dim); font-style: italic; font-size: 11px; cursor: pointer; display: none; flex: 1; }
+.j-note-cell:not(.has-notes) .j-note-empty { display: inline; }
+.j-note-edit-icon { opacity: 0; cursor: pointer; font-size: 10px; flex-shrink: 0; transition: opacity 0.12s; user-select: none; }
+.j-note-cell.has-notes:hover .j-note-edit-icon { opacity: 0.7; }
+.j-note-textarea { background: var(--surface); border: 1px solid var(--blue); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 6px; border-radius: 3px; width: 100%; min-height: 56px; resize: vertical; outline: none; box-sizing: border-box; }
+.j-note-buttons { display: flex; gap: 4px; margin-top: 4px; }
+.j-note-save { background: var(--blue); color: #000; border: none; border-radius: 3px; font-size: 10px; padding: 2px 8px; cursor: pointer; font-family: 'IBM Plex Mono', monospace; }
+.j-note-cancel { background: none; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; font-size: 10px; padding: 2px 8px; cursor: pointer; font-family: 'IBM Plex Mono', monospace; }
 #journal-perf { margin-top: 16px; margin-bottom: 4px; min-height: 20px; }
 #journal-perf-inner { display: flex; gap: 12px; flex-wrap: wrap; }
 .j-perf-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; display: flex; align-items: center; gap: 16px; }
@@ -476,7 +488,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .sentiment-neutral { background: var(--dim); color: var(--muted); border: 1px solid var(--border); }
 .signal-why-link { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--blue); background: none; border: none; cursor: pointer; padding: 0 4px; text-decoration: underline; }
 .signal-why-link:hover { opacity: 0.75; }
-.signal-explanation-box { background: rgba(79,158,255,0.05); border-left: 3px solid var(--blue); padding: 8px 12px; margin: 4px 0; font-family: 'Inter', sans-serif; font-size: 12px; color: var(--text); line-height: 1.5; display: none; }
+.signal-explanation-box { background: rgba(79,158,255,0.05); border-left: 3px solid var(--blue); padding: 8px 12px; margin: 4px 0; font-family: 'Inter', sans-serif; font-size: 12px; color: var(--text); line-height: 1.5; display: none; white-space: normal; word-wrap: break-word; overflow-wrap: break-word; max-width: 100%; overflow: hidden; }
 .signal-explanation-box.open { display: block; }
 .filing-inline-form { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; display: none; flex-direction: column; gap: 8px; }
 .filing-inline-form.open { display: flex; }
@@ -1276,11 +1288,19 @@ function renderJournalRows(rows,dateLabel){
       +(isMacroLinked?'<span class="j-macro-badge" title="Linked from macro observation">📎</span>':'')
       +(isFilingLinked?'<span class="j-filing-badge" title="Linked from 8-K filing">📎 8-K</span>':'')
       +'</td>';
-    var notesTd='<td class="left" contenteditable="true"'
-      +' data-scan-date="'+row.scan_date+'" data-ticker="'+tk+'" data-parent="'+par+'"'
-      +' data-has-notes="'+(hasNotes?'true':'false')+'"'
-      +' style="font-style:italic;cursor:text;outline:none;'+(hasNotes?'color:var(--muted)':'color:var(--dim)')+'">'+
-      (hasNotes?escHtml(notes):'＋ add note')+'</td>';
+    var notesTd='<td class="left j-note-cell'+(hasNotes?' has-notes':'')+'"'
+      +' data-scan-date="'+row.scan_date+'" data-ticker="'+tk+'" data-parent="'+par+'">'
+      +'<div class="j-note-display">'
+      +'<span class="j-note-text">'+escHtml(notes)+'</span>'
+      +'<span class="j-note-edit-icon" title="Edit note">✏️</span>'
+      +'<span class="j-note-empty">＋ add note</span>'
+      +'</div>'
+      +'<div class="j-note-editor" style="display:none">'
+      +'<textarea class="j-note-textarea">'+escHtml(notes)+'</textarea>'
+      +'<div class="j-note-buttons">'
+      +'<button class="j-note-save">Save</button>'
+      +'<button class="j-note-cancel">Cancel</button>'
+      +'</div></div></td>';
     return'<tr>'
       +'<td class="left" style="color:var(--muted)">'+fmtDate(row.scan_date)+'</td>'
       +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
@@ -1304,34 +1324,43 @@ function renderJournalRows(rows,dateLabel){
   }).join('');
   c.innerHTML='<table class="data-table"><colgroup>'+buildColgroup(W)+'</colgroup>'+buildThead(L,A,W)+'<tbody>'+tb+'</tbody></table>';
   c.querySelectorAll('.ticker-cell').forEach(function(el){attachTickerEvents(el,el.dataset.symbol);});
-  c.querySelectorAll('td[contenteditable]').forEach(function(td){
-    var origNotes=td.dataset.hasNotes==='true'?td.textContent:'';
-    td.addEventListener('focus',function(){
-      if(td.dataset.hasNotes==='false'){td.textContent='';td.style.color='var(--muted)';}
-    });
-    td.addEventListener('keydown',function(e){
-      if(e.key==='Enter'){e.preventDefault();td.blur();}
-    });
-    td.addEventListener('blur',async function(){
-      var sd=td.dataset.scanDate,tk=td.dataset.ticker,par=td.dataset.parent;
-      var cur=td.textContent||'';
-      if(cur===''){
-        td.textContent='＋ add note';td.style.color='var(--dim)';
-        td.dataset.hasNotes='false';
-        cur='';
-      }
-      if(cur===origNotes)return;
-      var saveVal=cur==='＋ add note'?'':cur;
+  c.querySelectorAll('.j-note-cell').forEach(function(td){
+    var sd=td.dataset.scanDate,tk=td.dataset.ticker,par=td.dataset.parent;
+    var display=td.querySelector('.j-note-display');
+    var editor=td.querySelector('.j-note-editor');
+    var textarea=td.querySelector('.j-note-textarea');
+    var noteText=td.querySelector('.j-note-text');
+    var noteEmpty=td.querySelector('.j-note-empty');
+    var editIcon=td.querySelector('.j-note-edit-icon');
+    var saveBtn=td.querySelector('.j-note-save');
+    var cancelBtn=td.querySelector('.j-note-cancel');
+    function openEditor(){
+      textarea.value=noteText.textContent;
+      display.style.display='none';
+      editor.style.display='block';
+      textarea.focus();
+    }
+    function closeEditor(){
+      editor.style.display='none';
+      display.style.display='';
+    }
+    editIcon.addEventListener('click',function(e){e.stopPropagation();openEditor();});
+    noteText.addEventListener('dblclick',openEditor);
+    noteEmpty.addEventListener('click',openEditor);
+    cancelBtn.addEventListener('click',closeEditor);
+    saveBtn.addEventListener('click',async function(){
+      var newNotes=textarea.value.trim();
       try{
         var r=await fetch('/api/journal/'+encodeURIComponent(sd)+'/'+encodeURIComponent(tk)+'/'+encodeURIComponent(par)+'/notes',
-          {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:saveVal})});
+          {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:newNotes})});
         if(!r.ok){console.error('notes save failed:',r.statusText);return;}
-        origNotes=cur;
-        td.dataset.hasNotes=saveVal?'true':'false';
+        noteText.textContent=newNotes;
+        if(newNotes){td.classList.add('has-notes');}else{td.classList.remove('has-notes');}
         if(cachedJournalRows[sd]){
           var entry=cachedJournalRows[sd].find(function(e){return e.ticker===tk&&e.parent===par;});
-          if(entry)entry.notes=saveVal;
+          if(entry)entry.notes=newNotes;
         }
+        closeEditor();
         td.classList.add('j-saved');
         setTimeout(function(){td.classList.remove('j-saved');},800);
       }catch(err){console.error('notes save:',err);}
