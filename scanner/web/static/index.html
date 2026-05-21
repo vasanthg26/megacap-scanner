@@ -329,7 +329,10 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .j-note-cell { max-width: 200px; }
 .j-note-display { display: flex; align-items: flex-start; gap: 4px; }
 .j-note-text { white-space: normal; word-wrap: break-word; overflow-wrap: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-style: italic; color: var(--muted); font-size: 11px; min-width: 0; flex: 1; }
+.j-note-text.expanded { -webkit-line-clamp: unset; overflow: visible; }
 .j-note-text:empty { display: none; }
+.j-note-toggle { display: none; color: var(--blue); font-size: 10px; cursor: pointer; user-select: none; white-space: nowrap; margin-top: 2px; }
+.j-note-cell.has-notes .j-note-toggle { display: block; }
 .j-note-empty { color: var(--dim); font-style: italic; font-size: 11px; cursor: pointer; display: none; flex: 1; }
 .j-note-cell:not(.has-notes) .j-note-empty { display: inline; }
 .j-note-edit-icon { opacity: 0; cursor: pointer; font-size: 10px; flex-shrink: 0; transition: opacity 0.12s; user-select: none; }
@@ -490,6 +493,15 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .signal-why-link:hover { opacity: 0.75; }
 .signal-explanation-box { background: rgba(79,158,255,0.05); border-left: 3px solid var(--blue); padding: 8px 12px; margin: 4px 0; font-family: 'Inter', sans-serif; font-size: 12px; color: var(--text); line-height: 1.5; display: none; white-space: normal; word-wrap: break-word; overflow-wrap: break-word; max-width: 100%; overflow: hidden; }
 .signal-explanation-box.open { display: block; }
+#sexp-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; }
+#sexp-modal-overlay.open { display: flex; }
+#sexp-modal { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; width: 560px; max-width: 95vw; font-family: 'Inter', sans-serif; }
+#sexp-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+#sexp-modal-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+#sexp-modal-close { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0 2px; line-height: 1; }
+#sexp-modal-close:hover { color: var(--text); }
+#sexp-modal-body { font-size: 12px; color: var(--text); line-height: 1.7; white-space: pre-wrap; word-wrap: break-word; min-height: 60px; }
+#sexp-modal-footer { margin-top: 14px; font-size: 11px; color: var(--muted); }
 .filing-inline-form { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; display: none; flex-direction: column; gap: 8px; }
 .filing-inline-form.open { display: flex; }
 .fif-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
@@ -708,6 +720,18 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     </div>
 
   </div><!-- /pages-container -->
+
+  <!-- Signal Explanation Modal -->
+  <div id="sexp-modal-overlay">
+    <div id="sexp-modal">
+      <div id="sexp-modal-header">
+        <h3 id="sexp-modal-title"></h3>
+        <button id="sexp-modal-close" onclick="closeSexpModal()">✕</button>
+      </div>
+      <div id="sexp-modal-body">Loading…</div>
+      <div id="sexp-modal-footer"></div>
+    </div>
+  </div>
 
   <!-- Macro Observation Modal -->
   <div id="obs-modal-overlay">
@@ -1135,8 +1159,7 @@ function renderScan(data,c,dateElId,subStyle){
       var rvolTrend=trendArrow(row.rvol_trend||'');
       var isActionable=action==='BUY'||action==='STRONG_BUY';
       var rowKey=tk+'__'+par;
-      var whyLink=isActionable?'<button class="signal-why-link" onclick="toggleSignalExplanation(this,\''+escHtml(tk)+'\',\''+escHtml(par)+'\',\''+escHtml(asOf)+'\')">💡 Why?</button>':'';
-      var expBox=isActionable?'<div class="signal-explanation-box" id="sexp-'+escHtml(rowKey)+'">Loading…</div>':'';
+      var whyLink=isActionable?'<button class="signal-why-link" onclick="toggleSignalExplanation(this,\''+escHtml(tk)+'\',\''+escHtml(par)+'\',\''+escHtml(asOf)+'\',\''+escHtml(action)+'\')">💡 Why?</button>':'';
       return'<tr><td class="left" style="color:var(--muted)">'+(row.rank!=null?row.rank:'—')+'</td>'
         +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
         +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
@@ -1149,8 +1172,7 @@ function renderScan(data,c,dateElId,subStyle){
         +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
         +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
         +'<td class="left">'+insH+'</td>'
-        +'<td class="left">'+earnH+'</td></tr>'
-        +(isActionable?'<tr><td colspan="'+W.length+'" style="padding:0 0 4px 0">'+expBox+'</td></tr>':'');
+        +'<td class="left">'+earnH+'</td></tr>';
     }).join('');
     return gHdr+dRows;
   }).join('');
@@ -1282,6 +1304,8 @@ function renderJournalRows(rows,dateLabel){
     var p20dCell=p20d!=null?((p20d*100).toFixed(1)+'%'):'—';
     var p20dCls=p20d!=null?(p20d>=0?'pos':'neg'):'';
     var hasNotes=notes.length>0;
+    var obsLineRe=/Observation \d+: Type: ([^\n]+?) Note: ([^\n]+)/g;
+    var displayNotes=notes.replace(obsLineRe,function(_,type,note){return'\u{1F4CE} '+type.trim()+' — '+note.trim();});
     var isMacroLinked=MACRO_RE.test(notes);
     var isFilingLinked=FILING_RE.test(notes);
     var macroBadgeTd='<td style="text-align:center">'
@@ -1291,10 +1315,11 @@ function renderJournalRows(rows,dateLabel){
     var notesTd='<td class="left j-note-cell'+(hasNotes?' has-notes':'')+'"'
       +' data-scan-date="'+row.scan_date+'" data-ticker="'+tk+'" data-parent="'+par+'">'
       +'<div class="j-note-display">'
-      +'<span class="j-note-text">'+escHtml(notes)+'</span>'
+      +'<span class="j-note-text">'+escHtml(displayNotes)+'</span>'
       +'<span class="j-note-edit-icon" title="Edit note">✏️</span>'
       +'<span class="j-note-empty">＋ add note</span>'
       +'</div>'
+      +'<span class="j-note-toggle">show more</span>'
       +'<div class="j-note-editor" style="display:none">'
       +'<textarea class="j-note-textarea">'+escHtml(notes)+'</textarea>'
       +'<div class="j-note-buttons">'
@@ -1334,6 +1359,7 @@ function renderJournalRows(rows,dateLabel){
     var editIcon=td.querySelector('.j-note-edit-icon');
     var saveBtn=td.querySelector('.j-note-save');
     var cancelBtn=td.querySelector('.j-note-cancel');
+    var toggleLink=td.querySelector('.j-note-toggle');
     function openEditor(){
       textarea.value=noteText.textContent;
       display.style.display='none';
@@ -1343,6 +1369,13 @@ function renderJournalRows(rows,dateLabel){
     function closeEditor(){
       editor.style.display='none';
       display.style.display='';
+    }
+    if(toggleLink){
+      toggleLink.addEventListener('click',function(){
+        var isExpanded=noteText.classList.contains('expanded');
+        noteText.classList.toggle('expanded',!isExpanded);
+        toggleLink.textContent=isExpanded?'show more':'show less';
+      });
     }
     editIcon.addEventListener('click',function(e){e.stopPropagation();openEditor();});
     noteText.addEventListener('dblclick',openEditor);
@@ -1354,7 +1387,8 @@ function renderJournalRows(rows,dateLabel){
         var r=await fetch('/api/journal/'+encodeURIComponent(sd)+'/'+encodeURIComponent(tk)+'/'+encodeURIComponent(par)+'/notes',
           {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:newNotes})});
         if(!r.ok){console.error('notes save failed:',r.statusText);return;}
-        noteText.textContent=newNotes;
+        var obsRe=/Observation \d+: Type: ([^\n]+?) Note: ([^\n]+)/g;
+        noteText.textContent=newNotes.replace(obsRe,function(_,type,note){return'\u{1F4CE} '+type.trim()+' — '+note.trim();});
         if(newNotes){td.classList.add('has-notes');}else{td.classList.remove('has-notes');}
         if(cachedJournalRows[sd]){
           var entry=cachedJournalRows[sd].find(function(e){return e.ticker===tk&&e.parent===par;});
@@ -1877,28 +1911,33 @@ function toggleFilingSaveForm(id){
   form.classList.toggle('open');
 }
 
-async function toggleSignalExplanation(btn,ticker,parent,scanDate){
-  var key=ticker+'__'+parent;
-  var box=document.getElementById('sexp-'+key);
-  if(!box)return;
-  var isOpen=box.classList.contains('open');
-  if(isOpen){box.classList.remove('open');return;}
-  box.classList.add('open');
-  if(box.dataset.loaded)return;
-  box.dataset.loaded='1';
-  box.textContent='Loading…';
+function closeSexpModal(){
+  document.getElementById('sexp-modal-overlay').classList.remove('open');
+}
+document.getElementById('sexp-modal-overlay').addEventListener('click',function(e){
+  if(e.target===this)closeSexpModal();
+});
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape')closeSexpModal();
+});
+
+async function toggleSignalExplanation(btn,ticker,parent,scanDate,actionLabel){
+  var overlay=document.getElementById('sexp-modal-overlay');
+  var title=document.getElementById('sexp-modal-title');
+  var body=document.getElementById('sexp-modal-body');
+  var footer=document.getElementById('sexp-modal-footer');
+  title.textContent=ticker+' — '+(actionLabel||'Signal');
+  body.textContent='Loading…';
+  footer.textContent='Scan date: '+scanDate;
+  overlay.classList.add('open');
   try{
     var r=await fetch('/api/signal-explanation/'+encodeURIComponent(ticker)+'/'+encodeURIComponent(parent)+'/'+encodeURIComponent(scanDate));
     if(!r.ok)throw new Error(r.statusText);
     var d=await r.json();
-    if(d.explanation){
-      box.textContent=d.explanation;
-    }else{
-      box.textContent='No explanation available yet. Run /api/admin/generate-explanations to generate.';
-    }
+    body.textContent=d.explanation||'No explanation available yet. Run /api/admin/generate-explanations to generate.';
   }catch(err){
     console.error('signal explanation:',err);
-    box.textContent='Failed to load explanation.';
+    body.textContent='Failed to load explanation.';
   }
 }
 

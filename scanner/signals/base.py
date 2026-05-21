@@ -312,12 +312,11 @@ def generate_signal_explanation(
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Write a 3-paragraph explanation (max 150 words total) for why {ticker} "
+                    f"Write exactly 3 bullet points (max 150 words total) explaining why {ticker} "
                     f"shows a {action_label} signal relative to its parent {parent}. "
                     f"Use these metrics:\n{bullets}\n\n"
-                    f"Paragraph 1: what the RS and momentum signals say. "
-                    f"Paragraph 2: confirmation and volume context. "
-                    f"Paragraph 3: key risks or caveats. "
+                    f"Each bullet: 1-2 sentences. No labels, no numbering, no 'Paragraph X:' prefix. "
+                    f"Start each bullet with •. Cover: RS/momentum, confirmation/volume, risks/caveats. "
                     f"Plain text only, no markdown."
                 ),
             }],
