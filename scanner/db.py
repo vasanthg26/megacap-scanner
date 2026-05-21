@@ -122,19 +122,22 @@ CREATE TABLE IF NOT EXISTS macro_observations (
 );
 
 CREATE TABLE IF NOT EXISTS filings_8k (
-    id               INTEGER   NOT NULL,
-    ticker           VARCHAR   NOT NULL,
-    filed_date       DATE      NOT NULL,
-    accession_number VARCHAR   NOT NULL,
-    form_type        VARCHAR   NOT NULL,
-    item_numbers     VARCHAR,
-    title            VARCHAR,
-    description      TEXT,
-    filing_url       VARCHAR,
-    saved_to_journal BOOLEAN   NOT NULL,
-    ingested_at      TIMESTAMP NOT NULL,
-    impact           VARCHAR,
-    impact_source    VARCHAR,
+    id                 INTEGER   NOT NULL,
+    ticker             VARCHAR   NOT NULL,
+    filed_date         DATE      NOT NULL,
+    accession_number   VARCHAR   NOT NULL,
+    form_type          VARCHAR   NOT NULL,
+    item_numbers       VARCHAR,
+    title              VARCHAR,
+    description        TEXT,
+    filing_url         VARCHAR,
+    saved_to_journal   BOOLEAN   NOT NULL,
+    ingested_at        TIMESTAMP NOT NULL,
+    impact             VARCHAR,
+    impact_source      VARCHAR,
+    summary            TEXT,
+    sentiment          VARCHAR,
+    impact_explanation TEXT,
     PRIMARY KEY (id),
     UNIQUE (accession_number)
 );
@@ -156,6 +159,16 @@ CREATE TABLE IF NOT EXISTS scan_results (
     computed_at TIMESTAMP NOT NULL,
     PRIMARY KEY (scan_date)
 );
+
+CREATE TABLE IF NOT EXISTS signal_explanations (
+    ticker        VARCHAR   NOT NULL,
+    parent        VARCHAR   NOT NULL,
+    scan_date     DATE      NOT NULL,
+    action_label  VARCHAR   NOT NULL,
+    explanation   TEXT,
+    generated_at  TIMESTAMP,
+    PRIMARY KEY (ticker, parent, scan_date)
+);
 """
 
 
@@ -171,6 +184,8 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             "ALTER TABLE journal ADD COLUMN confirm INTEGER",
             "ALTER TABLE journal ADD COLUMN earnings_days INTEGER",
             "ALTER TABLE filings_8k ADD COLUMN summary TEXT",
+            "ALTER TABLE filings_8k ADD COLUMN sentiment VARCHAR",
+            "ALTER TABLE filings_8k ADD COLUMN impact_explanation TEXT",
         ]:
             try:
                 conn.execute(_stmt)

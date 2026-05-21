@@ -970,7 +970,7 @@ async def api_run_cleanup_filings():
 
 @app.get("/api/admin/generate-summaries")
 def generate_summaries():
-    from scanner.ingest.filings import _fetch_filing_text, _generate_summary, _make_session
+    from scanner.ingest.filings import generate_filing_analysis, _fetch_filing_text, _make_session, MATERIAL_ITEMS
     from scanner.db import get_connection
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -996,15 +996,21 @@ def generate_summaries():
                 if not text:
                     results.append({"ticker": ticker, "status": "failed", "reason": "no text fetched"})
                     continue
-                summary = _generate_summary(item_numbers or "", title, text)
+                item_labels = ", ".join(
+                    MATERIAL_ITEMS.get(i.strip(), i.strip())
+                    for i in (item_numbers or "").split(",")
+                    if i.strip()
+                )
+                summary, sentiment, impact_explanation = generate_filing_analysis(item_labels, title, text)
                 if summary:
                     conn.execute(
-                        "UPDATE filings_8k SET summary = ? WHERE id = ?",
-                        [summary, id_],
+                        "UPDATE filings_8k SET summary=?, sentiment=?, impact_explanation=? WHERE id=?",
+                        [summary, sentiment, impact_explanation, id_],
                     )
-                    results.append({"ticker": ticker, "status": "success", "summary": summary[:100]})
+                    results.append({"ticker": ticker, "status": "success", "summary": summary[:100],
+                                    "sentiment": sentiment})
                 else:
-                    results.append({"ticker": ticker, "status": "failed", "reason": "empty summary returned"})
+                    results.append({"ticker": ticker, "status": "failed", "reason": "empty analysis returned"})
             except Exception as exc:
                 logger.error("generate-summaries: filing %s/%s failed: %s", ticker, id_, exc)
                 results.append({"ticker": ticker, "status": "error", "error": str(exc)})
@@ -1013,6 +1019,72 @@ def generate_summaries():
         conn.close()
 
     return {"results": results}
+
+
+@app.get("/api/admin/generate-explanations")
+async def generate_explanations():
+    """Generate signal explanations for all BUY/STRONG_BUY rows in the most recent scan."""
+    from scanner.db import get_connection
+    from scanner.signals.base import generate_signal_explanation
+    import json as _json
+
+    def _run():
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT scan_date, result_json FROM scan_results ORDER BY scan_date DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return {"error": "No scan results found"}
+            scan_date = str(row[0])
+            data = _json.loads(row[1])
+            groups = data.get("groups", [])
+            results = []
+            for grp in groups:
+                parent = grp.get("parent", "")
+                for r in grp.get("rows", []):
+                    action = (r.get("action_label") or "").upper()
+                    if action not in ("BUY", "STRONG_BUY"):
+                        continue
+                    ticker = r.get("ticker", "")
+                    try:
+                        explanation = generate_signal_explanation(ticker, parent, scan_date, r, conn)
+                        results.append({
+                            "ticker": ticker,
+                            "parent": parent,
+                            "action": action,
+                            "status": "ok" if explanation else "failed",
+                        })
+                    except Exception as exc:
+                        logger.error("generate-explanations: %s/%s failed: %s", ticker, parent, exc)
+                        results.append({"ticker": ticker, "parent": parent, "status": "error", "error": str(exc)})
+            return {"scan_date": scan_date, "results": results}
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_run)
+    return result
+
+
+@app.get("/api/signal-explanation/{ticker}/{parent}/{scan_date}")
+async def get_signal_explanation(ticker: str, parent: str, scan_date: str):
+    """Return cached signal explanation for a given ticker/parent/scan_date."""
+    from scanner.db import get_connection
+
+    def _run():
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT explanation FROM signal_explanations WHERE ticker=? AND parent=? AND scan_date=?",
+                [ticker.upper(), parent.upper(), scan_date],
+            ).fetchone()
+            if row is None:
+                return {"explanation": None}
+            return {"explanation": row[0]}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_run)
 
 
 @app.get("/api/admin/reingest-filings-14d")
@@ -1919,7 +1991,8 @@ def _get_filings_sync(universe: str, ticker_filter: str | None) -> dict:
             f"""
             SELECT id, ticker, filed_date, accession_number, form_type,
                    item_numbers, title, description, filing_url,
-                   saved_to_journal, ingested_at, impact, impact_source, summary
+                   saved_to_journal, ingested_at, impact, impact_source, summary,
+                   sentiment, impact_explanation
             FROM filings_8k
             WHERE ticker IN ({placeholders})
               AND filed_date >= CURRENT_DATE - INTERVAL 7 DAY
@@ -1955,6 +2028,8 @@ def _get_filings_sync(universe: str, ticker_filter: str | None) -> dict:
                 "impact": r[11] or "LOW",
                 "impact_source": r[12] or "auto",
                 "summary": r[13] or "",
+                "sentiment": r[14] or "",
+                "impact_explanation": r[15] or "",
             })
 
         # Sort: megacaps first, then dependents; within each group alpha by ticker

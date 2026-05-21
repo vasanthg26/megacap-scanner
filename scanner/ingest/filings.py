@@ -74,6 +74,32 @@ def _get_anthropic_key() -> str | None:
     return None
 
 
+_haiku_client = None
+_sonnet_client = None
+
+
+def _get_haiku_client():
+    global _haiku_client
+    if _haiku_client is None:
+        import anthropic
+        key = _get_anthropic_key()
+        if not key:
+            return None
+        _haiku_client = anthropic.Anthropic(api_key=key, timeout=10.0)
+    return _haiku_client
+
+
+def _get_sonnet_client():
+    global _sonnet_client
+    if _sonnet_client is None:
+        import anthropic
+        key = _get_anthropic_key()
+        if not key:
+            return None
+        _sonnet_client = anthropic.Anthropic(api_key=key, timeout=10.0)
+    return _sonnet_client
+
+
 def _fetch_filing_text(url: str, session: requests.Session) -> str | None:
     """Fetch filing HTML and return stripped plain text (first 3000 chars)."""
     try:
@@ -90,28 +116,68 @@ def _fetch_filing_text(url: str, session: requests.Session) -> str | None:
         return None
 
 
-def _generate_summary(item_labels: str, title: str | None, filing_text: str | None) -> str | None:
-    key = _get_anthropic_key()
-    if not key:
-        return None
+def generate_filing_analysis(
+    item_labels: str, title: str | None, filing_text: str | None
+) -> tuple[str | None, str | None, str | None]:
+    """Two-model cascade: Haiku extracts facts, Sonnet returns JSON {summary, sentiment, impact}.
+
+    Returns (summary, sentiment, impact_explanation). All may be None on failure.
+    Sentiment is one of: POSITIVE, NEGATIVE, NEUTRAL.
+    """
     if not filing_text:
-        return None
+        return None, None, None
+
+    haiku = _get_haiku_client()
+    sonnet = _get_sonnet_client()
+    if not haiku or not sonnet:
+        return None, None, None
+
+    text_cap = filing_text[:800]
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=key, timeout=10.0)
-        prompt = (
-            f"Summarize this SEC 8-K filing in one sentence (max 20 words). "
-            f"Items: {item_labels}. Title: {title or 'N/A'}.\n\nFiling text:\n{filing_text}"
+        haiku_prompt = (
+            f"Extract the key facts from this SEC 8-K filing as 3-4 bullet points. "
+            f"Items: {item_labels}. Title: {title or 'N/A'}.\n\nFiling text:\n{text_cap}"
         )
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
+        h_msg = haiku.messages.create(
+            model="claude-haiku-4-5-20251001",
             max_tokens=100,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": haiku_prompt}],
         )
-        return msg.content[0].text.strip() if msg.content else None
+        facts = h_msg.content[0].text.strip() if h_msg.content else ""
     except Exception as exc:
-        logger.warning("Summary generation failed: %s", exc)
-        return None
+        logger.warning("Haiku fact extraction failed: %s", exc)
+        return None, None, None
+
+    try:
+        sonnet_prompt = (
+            f"Analyze this SEC 8-K filing based on these extracted facts:\n{facts}\n\n"
+            f"Return ONLY a JSON object with exactly these keys:\n"
+            f'- "summary": one sentence max 20 words describing what happened\n'
+            f'- "sentiment": one of POSITIVE, NEGATIVE, or NEUTRAL\n'
+            f'- "impact": one sentence max 20 words explaining investor impact\n\n'
+            f"JSON only, no markdown fences."
+        )
+        s_msg = sonnet.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=150,
+            messages=[{"role": "user", "content": sonnet_prompt}],
+        )
+        raw = s_msg.content[0].text.strip() if s_msg.content else ""
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            logger.warning("Sonnet filing analysis returned no JSON: %s", raw[:100])
+            return None, None, None
+        import json
+        data = json.loads(m.group())
+        summary = (data.get("summary") or "").strip() or None
+        sentiment = (data.get("sentiment") or "").strip().upper() or None
+        if sentiment not in ("POSITIVE", "NEGATIVE", "NEUTRAL"):
+            sentiment = None
+        impact_explanation = (data.get("impact") or "").strip() or None
+        return summary, sentiment, impact_explanation
+    except Exception as exc:
+        logger.warning("Sonnet filing analysis failed: %s", exc)
+        return None, None, None
 
 
 def cleanup_filings(conn) -> dict:
@@ -381,6 +447,8 @@ def ingest_filings(
                     next_id = row[0]
 
                     summary = None
+                    sentiment = None
+                    impact_explanation = None
                     if summaries_enabled:
                         filing_text = _fetch_filing_text(f["filing_url"], session)
                         logger.debug(
@@ -394,7 +462,9 @@ def ingest_filings(
                                 for i in (f["item_numbers"] or "").split(",")
                                 if i.strip()
                             )
-                            summary = _generate_summary(item_labels, f["title"], filing_text)
+                            summary, sentiment, impact_explanation = generate_filing_analysis(
+                                item_labels, f["title"], filing_text
+                            )
                             time.sleep(0.5)
 
                     try:
@@ -403,8 +473,9 @@ def ingest_filings(
                             INSERT INTO filings_8k
                                 (id, ticker, filed_date, accession_number, form_type,
                                  item_numbers, title, description, filing_url,
-                                 saved_to_journal, ingested_at, impact, impact_source, summary)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 saved_to_journal, ingested_at, impact, impact_source,
+                                 summary, sentiment, impact_explanation)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             [
                                 next_id,
@@ -421,6 +492,8 @@ def ingest_filings(
                                 f["impact"],
                                 f["impact_source"],
                                 summary,
+                                sentiment,
+                                impact_explanation,
                             ],
                         )
                         written += 1

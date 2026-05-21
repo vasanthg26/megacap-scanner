@@ -1,9 +1,14 @@
 """Signal protocol definition, action classification, and compositing utilities."""
 
+import logging
 import math
+import re
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Protocol, Sequence
 import duckdb
+
+logger = logging.getLogger(__name__)
 
 
 class Action(StrEnum):
@@ -233,3 +238,108 @@ def calc_price_range_pct(
     if high_20d == low_20d:
         return float("nan")
     return (today_close - low_20d) / (high_20d - low_20d) * 100
+
+
+def generate_signal_explanation(
+    ticker: str,
+    parent: str,
+    scan_date: str,
+    signal_data: dict,
+    conn: duckdb.DuckDBPyConnection,
+) -> str | None:
+    """Generate a plain-text explanation for a BUY/STRONG_BUY signal using Haiku→Sonnet cascade.
+
+    Checks DB cache first — returns cached explanation if available, no API call.
+    Only call for action_label in (BUY, STRONG_BUY).
+    """
+    action_label = signal_data.get("action_label", "")
+    if action_label not in ("BUY", "STRONG_BUY"):
+        return None
+
+    cached = conn.execute(
+        "SELECT explanation FROM signal_explanations WHERE ticker=? AND parent=? AND scan_date=?",
+        [ticker, parent, scan_date],
+    ).fetchone()
+    if cached is not None:
+        return cached[0]
+
+    from scanner.ingest.filings import _get_haiku_client, _get_sonnet_client
+
+    haiku = _get_haiku_client()
+    sonnet = _get_sonnet_client()
+    if not haiku or not sonnet:
+        return None
+
+    def _fmt(v, suffix="", decimals=2, pct=False):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "N/A"
+        if pct:
+            return f"{v * 100:.1f}%"
+        return f"{v:.{decimals}f}{suffix}"
+
+    facts_input = (
+        f"Ticker: {ticker} | Parent: {parent} | Action: {action_label}\n"
+        f"RS Score: {_fmt(signal_data.get('rs_score'), decimals=4)} | RS Trend: {signal_data.get('rs_trend', 'N/A')}\n"
+        f"RVOL: {_fmt(signal_data.get('rvol'), decimals=2)} | RVOL Trend: {signal_data.get('rvol_trend', 'N/A')}\n"
+        f"Confirmation Score: {signal_data.get('confirm', 'N/A')}\n"
+        f"Days Above 50MA: {signal_data.get('days_above_50ma', 'N/A')}\n"
+        f"20-day Price Range Position: {_fmt(signal_data.get('price_range_pct'), decimals=1)}%\n"
+        f"Parent Regime: {signal_data.get('parent_regime', 'N/A')} | Parent 20d Return: {_fmt(signal_data.get('parent_20d_return'), pct=True)}\n"
+        f"Insider Activity: {signal_data.get('insider_annotation', 'None')}\n"
+        f"Earnings Days: {signal_data.get('earnings_days', 'N/A')}"
+    )
+
+    try:
+        h_msg = haiku.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Format these signal metrics as 3-4 concise bullet points for a trader:\n{facts_input}"
+                ),
+            }],
+        )
+        bullets = h_msg.content[0].text.strip() if h_msg.content else facts_input
+    except Exception as exc:
+        logger.warning("Haiku signal formatting failed for %s: %s", ticker, exc)
+        bullets = facts_input
+
+    try:
+        s_msg = sonnet.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Write a 3-paragraph explanation (max 150 words total) for why {ticker} "
+                    f"shows a {action_label} signal relative to its parent {parent}. "
+                    f"Use these metrics:\n{bullets}\n\n"
+                    f"Paragraph 1: what the RS and momentum signals say. "
+                    f"Paragraph 2: confirmation and volume context. "
+                    f"Paragraph 3: key risks or caveats. "
+                    f"Plain text only, no markdown."
+                ),
+            }],
+        )
+        explanation = s_msg.content[0].text.strip() if s_msg.content else None
+    except Exception as exc:
+        logger.warning("Sonnet signal explanation failed for %s: %s", ticker, exc)
+        return None
+
+    if explanation:
+        try:
+            conn.execute(
+                """
+                INSERT INTO signal_explanations (ticker, parent, scan_date, action_label, explanation, generated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (ticker, parent, scan_date) DO UPDATE SET
+                    explanation = excluded.explanation,
+                    generated_at = excluded.generated_at
+                """,
+                [ticker, parent, scan_date, action_label, explanation, datetime.now(timezone.utc)],
+            )
+        except Exception as exc:
+            logger.error("Failed to cache signal explanation for %s/%s/%s: %s", ticker, parent, scan_date, exc)
+
+    return explanation

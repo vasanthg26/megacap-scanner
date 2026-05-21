@@ -467,8 +467,17 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .filing-save-btn.saved { color: var(--green); border-color: var(--green); opacity: 0.7; cursor: default; }
 .filing-summary { font-style: italic; font-size: 13px; color: #c0cce0; margin-top: 4px; }
 [data-theme="light"] .filing-summary { color: #2d3748; }
+.filing-impact-exp { font-style: italic; font-size: 12px; color: var(--muted); margin-top: 3px; }
 .hf-summary { font-style: italic; font-size: 12px; color: #c0cce0; margin-top: 2px; }
 [data-theme="light"] .hf-summary { color: #2d3748; }
+.sentiment-pill { font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; }
+.sentiment-positive { background: rgba(0,200,100,0.12); color: var(--green); border: 1px solid var(--green); }
+.sentiment-negative { background: rgba(255,77,109,0.12); color: var(--red); border: 1px solid var(--red); }
+.sentiment-neutral { background: var(--dim); color: var(--muted); border: 1px solid var(--border); }
+.signal-why-link { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--blue); background: none; border: none; cursor: pointer; padding: 0 4px; text-decoration: underline; }
+.signal-why-link:hover { opacity: 0.75; }
+.signal-explanation-box { background: rgba(79,158,255,0.05); border-left: 3px solid var(--blue); padding: 8px 12px; margin: 4px 0; font-family: 'Inter', sans-serif; font-size: 12px; color: var(--text); line-height: 1.5; display: none; }
+.signal-explanation-box.open { display: block; }
 .filing-inline-form { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; display: none; flex-direction: column; gap: 8px; }
 .filing-inline-form.open { display: flex; }
 .fif-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
@@ -1112,19 +1121,24 @@ function renderScan(data,c,dateElId,subStyle){
       var earnH=earnLbl?'<span style="'+earnSty+'">'+earnLbl+'</span>':'<span style="color:var(--dim)">—</span>';
       var rsTrend=trendArrow(row.rs_trend||'');
       var rvolTrend=trendArrow(row.rvol_trend||'');
+      var isActionable=action==='BUY'||action==='STRONG_BUY';
+      var rowKey=tk+'__'+par;
+      var whyLink=isActionable?'<button class="signal-why-link" onclick="toggleSignalExplanation(this,\''+escHtml(tk)+'\',\''+escHtml(par)+'\',\''+escHtml(asOf)+'\')">💡 Why?</button>':'';
+      var expBox=isActionable?'<div class="signal-explanation-box" id="sexp-'+escHtml(rowKey)+'">Loading…</div>':'';
       return'<tr><td class="left" style="color:var(--muted)">'+(row.rank!=null?row.rank:'—')+'</td>'
         +'<td class="left"><span class="ticker-cell" data-symbol="'+tk+'">'+tk+'</span></td>'
         +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
         +'<td>'+fmt2(row.price)+'</td>'
         +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+(rsTrend?' '+rsTrend:'')+'</td>'
-        +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span></td>'
+        +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span>'+whyLink+'</td>'
         +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
         +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+(rvolTrend?' '+rvolTrend:'')+'</td>'
         +'<td>'+cfH+'</td>'
         +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
         +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
         +'<td class="left">'+insH+'</td>'
-        +'<td class="left">'+earnH+'</td></tr>';
+        +'<td class="left">'+earnH+'</td></tr>'
+        +(isActionable?'<tr><td colspan="'+W.length+'" style="padding:0 0 4px 0">'+expBox+'</td></tr>':'');
     }).join('');
     return gHdr+dRows;
   }).join('');
@@ -1656,9 +1670,13 @@ async function loadHighImpactFilings(){
       var dt=f.filed_date?f.filed_date.slice(5).replace('-','/'):'';
       var summaryText=f.summary||(f.description?f.description.slice(0,150):'');
       var summaryHtml=summaryText?'<div class="hf-summary">'+escHtml(summaryText)+'</div>':'';
+      var sentIcon='';
+      if(f.sentiment==='POSITIVE')sentIcon='<span title="Positive">📈</span> ';
+      else if(f.sentiment==='NEGATIVE')sentIcon='<span title="Negative">📉</span> ';
       return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">'
         +'<div style="flex:1;min-width:0;">'
         +'<span style="font-size:11px;font-weight:600;color:var(--red);margin-right:6px;">[HIGH]</span>'
+        +sentIcon
         +'<span style="font-size:13px;font-weight:700;color:var(--text);">'+escHtml(f.ticker)+'</span>'
         +'<span style="color:var(--muted);font-size:12px;margin:0 4px;">·</span>'
         +'<span style="color:var(--muted);font-size:12px;">'+escHtml(dt)+'</span>'
@@ -1749,7 +1767,12 @@ function buildFilingRow(f){
   var saveCls='filing-save-btn'+(f.saved_to_journal?' saved':'');
   var today=new Date().toISOString().slice(0,10);
   var summaryText=f.summary||(f.description?f.description.slice(0,150):'');
-  var summaryHtml=summaryText?'<div class="filing-summary">'+escHtml(summaryText)+'</div>':'';
+  var sentPill='';
+  if(f.sentiment==='POSITIVE')sentPill='<span class="sentiment-pill sentiment-positive">📈 Positive</span>';
+  else if(f.sentiment==='NEGATIVE')sentPill='<span class="sentiment-pill sentiment-negative">📉 Negative</span>';
+  else if(f.sentiment==='NEUTRAL')sentPill='<span class="sentiment-pill sentiment-neutral">⚖️ Neutral</span>';
+  var summaryHtml=summaryText?'<div class="filing-summary">'+escHtml(summaryText)+sentPill+'</div>':'';
+  var impExpHtml=f.impact_explanation?'<div class="filing-impact-exp">'+escHtml(f.impact_explanation)+'</div>':'';
   return '<div class="filing-row" id="frow-'+f.id+'">'
     +'<div class="filing-meta">'
     +'<span class="filing-date">'+escHtml(f.filed_date)+'</span>'
@@ -1757,6 +1780,7 @@ function buildFilingRow(f){
     +(f.title?'<span class="filing-title">'+escHtml(f.title)+'</span>':'')
     +'<div class="filing-items">'+pills+'</div>'
     +summaryHtml
+    +impExpHtml
     +impPill
     +'</div>'
     +'<div class="filing-actions">'
@@ -1822,6 +1846,31 @@ function toggleFilingSaveForm(id){
   var form=document.getElementById('fif-'+id);
   if(!form)return;
   form.classList.toggle('open');
+}
+
+async function toggleSignalExplanation(btn,ticker,parent,scanDate){
+  var key=ticker+'__'+parent;
+  var box=document.getElementById('sexp-'+key);
+  if(!box)return;
+  var isOpen=box.classList.contains('open');
+  if(isOpen){box.classList.remove('open');return;}
+  box.classList.add('open');
+  if(box.dataset.loaded)return;
+  box.dataset.loaded='1';
+  box.textContent='Loading…';
+  try{
+    var r=await fetch('/api/signal-explanation/'+encodeURIComponent(ticker)+'/'+encodeURIComponent(parent)+'/'+encodeURIComponent(scanDate));
+    if(!r.ok)throw new Error(r.statusText);
+    var d=await r.json();
+    if(d.explanation){
+      box.textContent=d.explanation;
+    }else{
+      box.textContent='No explanation available yet. Run /api/admin/generate-explanations to generate.';
+    }
+  }catch(err){
+    console.error('signal explanation:',err);
+    box.textContent='Failed to load explanation.';
+  }
 }
 
 async function saveFilingToJournal(id){
