@@ -1021,6 +1021,59 @@ def generate_summaries():
     return {"results": results}
 
 
+@app.get("/api/admin/generate-sentiments")
+def generate_sentiments():
+    from scanner.ingest.filings import generate_filing_analysis, _fetch_filing_text, _make_session, MATERIAL_ITEMS
+    from scanner.db import get_connection
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"error": "ANTHROPIC_API_KEY not set"}
+
+    results = []
+    session = _make_session()
+    conn = get_connection()
+    try:
+        filings = conn.execute("""
+            SELECT id, ticker, filing_url, item_numbers, title
+            FROM filings_8k
+            WHERE summary IS NOT NULL
+            AND sentiment IS NULL
+            AND filing_url IS NOT NULL
+            ORDER BY filed_date DESC
+            LIMIT 10
+        """).fetchall()
+
+        for id_, ticker, url, item_numbers, title in filings:
+            try:
+                text = _fetch_filing_text(url, session)
+                if not text:
+                    results.append({"ticker": ticker, "status": "failed", "reason": "no text fetched"})
+                    continue
+                item_labels = ", ".join(
+                    MATERIAL_ITEMS.get(i.strip(), i.strip())
+                    for i in (item_numbers or "").split(",")
+                    if i.strip()
+                )
+                _, sentiment, impact_explanation = generate_filing_analysis(item_labels, title, text)
+                if sentiment:
+                    conn.execute(
+                        "UPDATE filings_8k SET sentiment=?, impact_explanation=? WHERE id=?",
+                        [sentiment, impact_explanation, id_],
+                    )
+                    results.append({"ticker": ticker, "status": "success", "sentiment": sentiment})
+                else:
+                    results.append({"ticker": ticker, "status": "failed", "reason": "empty analysis returned"})
+            except Exception as exc:
+                logger.error("generate-sentiments: filing %s/%s failed: %s", ticker, id_, exc)
+                results.append({"ticker": ticker, "status": "error", "error": str(exc)})
+    finally:
+        session.close()
+        conn.close()
+
+    return {"results": results}
+
+
 @app.get("/api/admin/generate-explanations")
 async def generate_explanations():
     """Generate signal explanations for all BUY/STRONG_BUY rows in the most recent scan."""
