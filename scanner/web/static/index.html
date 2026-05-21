@@ -551,6 +551,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     <div class="nav-sep">DATA</div>
     <button class="nav-item" data-page="megacap"><span class="nav-icon">📈</span>Mega-Cap</button>
     <button class="nav-item" data-page="dependents"><span class="nav-icon">📉</span>Dependents</button>
+    <button class="nav-item" data-page="themes"><span class="nav-icon">🧺</span>Themes</button>
     <div class="nav-sep">TOOLS</div>
     <button class="nav-item" data-page="scheduler"><span class="nav-icon">⚙️</span>Scheduler</button>
     <button class="nav-item" data-page="filings"><span class="nav-icon">📋</span>Filings</button>
@@ -631,6 +632,16 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
       <div id="scan-c-dependents"><div class="loading-overlay">Loading&hellip;</div></div>
     </div>
 
+    <!-- THEMES -->
+    <div class="page" id="page-themes">
+      <div class="page-title">Theme Basket Scanner</div>
+      <div class="page-sub">RS vs benchmark ETF — exploratory signals, no backtest validation</div>
+      <div style="background:var(--warn-bg,#332200);border:1px solid var(--warn-border,#664400);border-radius:4px;padding:8px 12px;margin-bottom:14px;color:var(--warn-text,#ffaa00);font-size:12px;">
+        ⚠ EXPLORATORY — backtesting pending. All signals display WATCH only and do not affect action labels.
+      </div>
+      <div id="themes-c"><div class="loading-overlay">Loading&hellip;</div></div>
+    </div>
+
     <!-- SCHEDULER -->
     <div class="page" id="page-scheduler">
       <div class="page-title">Scheduler</div>
@@ -704,6 +715,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
         <button class="j-filter" data-filter="WAIT">WAIT</button>
         <button class="j-filter" data-filter="MACRO">📎 Macro</button>
         <button class="j-filter" data-filter="FILING">📎 8-K</button>
+        <button class="j-filter" data-filter="WATCH">🧺 Themes</button>
       </div>
       <div id="journal-c-journal"><div class="loading-overlay">Loading&hellip;</div></div>
     </div>
@@ -806,7 +818,7 @@ document.getElementById('theme-toggle').addEventListener('click',function(){appl
 
 /* ── Navigation ───────────────────────── */
 var currentPage='scanner';
-var PAGE_LABELS={scanner:'Scanner',megacap:'Mega-Cap',dependents:'Dependents',scheduler:'Scheduler',filings:'Filings',journal:'Journal',search:'Search'};
+var PAGE_LABELS={scanner:'Scanner',megacap:'Mega-Cap',dependents:'Dependents',themes:'Themes',scheduler:'Scheduler',filings:'Filings',journal:'Journal',search:'Search'};
 
 function switchPage(page){
   if(page===currentPage)return;
@@ -826,6 +838,9 @@ function switchPage(page){
   }
   if(page==='dependents'&&cachedScan){
     renderScan(cachedScan,document.getElementById('scan-c-dependents'),'scan-sub');
+  }
+  if(page==='themes'){
+    loadThemes();
   }
   if(page==='scheduler'&&cachedStatus){
     renderScheduler(cachedStatus);
@@ -1007,7 +1022,7 @@ function renderActivityLog(entries){
       +'</div>';
   }).join('');
 }
-var _JOB_ENDPOINTS={'ingest':'/api/run/ingest','ingest-estimates':'/api/run/ingest-estimates','ingest-insiders':'/api/run/ingest-insiders','ingest-earnings':'/api/run/ingest-earnings','ingest-filings':'/api/run/ingest-filings','cleanup-filings':'/api/run/cleanup-filings','run-scan':'/api/run/run-scan','journal-capture':'/api/run/journal-capture'};
+var _JOB_ENDPOINTS={'ingest':'/api/run/ingest','ingest-estimates':'/api/run/ingest-estimates','ingest-insiders':'/api/run/ingest-insiders','ingest-earnings':'/api/run/ingest-earnings','ingest-filings':'/api/run/ingest-filings','cleanup-filings':'/api/run/cleanup-filings','run-scan':'/api/run/run-scan','journal-capture':'/api/run/journal-capture','scan-themes':'/api/run/scan-themes'};
 function renderScheduler(data){
   var tbody=document.getElementById('sched-tbody'),jobs=data.jobs||data;
   if(!Array.isArray(jobs)||!jobs.length){tbody.innerHTML='<tr><td colspan="4" style="color:var(--dim);padding:12px 14px;">No jobs configured</td></tr>';return;}
@@ -1180,6 +1195,71 @@ function renderScan(data,c,dateElId,subStyle){
   c.querySelectorAll('.ticker-cell').forEach(function(el){attachTickerEvents(el,el.dataset.symbol);});
 }
 
+/* ── Themes ───────────────────────────── */
+async function loadThemes(){
+  var c=document.getElementById('themes-c');
+  if(!c)return;
+  try{
+    var r=await fetch('/api/theme-scan');
+    if(!r.ok)throw new Error(r.statusText);
+    var data=await r.json();
+    renderThemes(data,c);
+  }catch(err){
+    console.error('themes:',err);
+    c.innerHTML='<div class="error-overlay">Failed to load theme data: '+err.message+'</div>';
+  }
+}
+function renderThemes(data,c){
+  if(!c)return;
+  var themes=data.themes||[];
+  var scanDate=data.scan_date||'';
+  if(!themes.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No theme results — run scan-themes first.</div>';return;}
+  var ACTIVE_STYLE={'ACTIVE':'color:#4ade80;font-weight:700','NEUTRAL':'color:#facc15','INACTIVE':'color:#f87171','UNKNOWN':'color:var(--dim)'};
+  var W=[72,68,72,80,72,72,68,72,80,120,110];
+  var L=['Ticker','Price','RS vs ETF','RS Trend','RVOL','RVOL Trnd','Confirm','50MA','Range%','Insiders','Earnings'];
+  var A=['left','','','center','','center','','','','left','left'];
+  var html='';
+  themes.forEach(function(theme){
+    var ta=theme.theme_active||'UNKNOWN';
+    var taStyle=ACTIVE_STYLE[ta]||'';
+    var badge='<span style="'+taStyle+';font-size:11px;margin-left:8px;">'+ta+'</span>';
+    html+='<div style="margin-bottom:22px;">';
+    html+='<div style="font-size:13px;font-weight:700;margin-bottom:6px;padding:4px 0;">'+escHtml(theme.theme_label||theme.theme_name)+badge+'<span style="color:var(--dim);font-size:11px;margin-left:8px;">benchmark: '+escHtml(theme.benchmark_etf)+'</span></div>';
+    var rows=(theme.tickers||[]);
+    if(!rows.length){html+='<div style="color:var(--dim);font-size:12px;padding:4px;">No data</div></div>';return;}
+    var tbody=rows.map(function(row){
+      var rsN=row.rs_score!=null?parseFloat(row.rs_score):null;
+      var rsStr=rsN!=null?(rsN>=0?'+':'')+fmtPct(rsN*100):'—';
+      var rsClass=rsN!=null?(rsN>0?'val-pos':(rsN<0?'val-neg':'')):'';
+      var rvN=row.rvol!=null?row.rvol:null;
+      var cfN=row.confirm!=null?row.confirm:null;
+      var ins=row.insider_annotation||'';
+      var insH=ins?'<span class="'+insiderClass(ins)+'">'+ins+'</span>':'<span class="ins-none">—</span>';
+      var earnH=row.earnings_days!=null?('<span style="'+earningsStyle(row.earnings_days)+'">'+earningsLabel(row.earnings_days)+'</span>'):'<span style="color:var(--dim)">—</span>';
+      var rsTrend=trendArrow(row.rs_trend||'');
+      var rvolTrend=trendArrow(row.rvol_trend||'');
+      return '<tr>'
+        +'<td class="left"><span class="ticker-cell" data-symbol="'+row.ticker+'">'+row.ticker+'</span></td>'
+        +'<td>'+fmt2(row.price)+'</td>'
+        +'<td class="'+rsClass+'">'+rsStr+(rsTrend?' '+rsTrend:'')+'</td>'
+        +'<td style="text-align:center">'+rsTrend+'</td>'
+        +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
+        +'<td style="text-align:center">'+rvolTrend+'</td>'
+        +'<td>'+(cfN!=null?'<span class="'+confClass(cfN,4)+'">'+cfN+'/4</span>':'<span class="conf-low">—</span>')+'</td>'
+        +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
+        +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
+        +'<td class="left">'+insH+'</td>'
+        +'<td class="left">'+earnH+'</td>'
+        +'</tr>';
+    }).join('');
+    html+='<table class="data-table"><colgroup>'+buildColgroup(W)+'</colgroup>'+buildThead(L,A,W)+'<tbody>'+tbody+'</tbody></table>';
+    html+='</div>';
+  });
+  if(scanDate)html='<div style="color:var(--dim);font-size:11px;margin-bottom:10px;">as of '+fmtDate(scanDate)+'</div>'+html;
+  c.innerHTML=html;
+  c.querySelectorAll('.ticker-cell').forEach(function(el){attachTickerEvents(el,el.dataset.symbol);});
+}
+
 /* ── Journal ──────────────────────────── */
 async function loadJournal(){
   try{
@@ -1267,6 +1347,7 @@ async function applyFilter(f){
       if(f==='FILING')return FILING_RE.test(n);
       var al=(row.action_label||'').toUpperCase();
       if(f==='WAIT')return al==='WAIT'||al.indexOf('WAIT -')===0;
+      if(f==='WATCH')return al==='WATCH'||(row.signal_source||'').toLowerCase()==='theme';
       return al===f;
     });
     renderJournalRows(filtered,'');
@@ -1987,7 +2068,7 @@ async function refreshAll(){
   var btn=document.getElementById('refresh-btn');
   btn.querySelector('.nav-icon').textContent='↻';
   btn.disabled=true;
-  await Promise.allSettled([loadBanner(),loadScheduler(),loadMegacap(),loadScan(),loadJournal(),loadActivityLog(),loadObservations(),loadHighImpactFilings()]);
+  await Promise.allSettled([loadBanner(),loadScheduler(),loadMegacap(),loadScan(),loadJournal(),loadActivityLog(),loadObservations(),loadHighImpactFilings(),loadThemes()]);
   btn.disabled=false;
   var now=new Date();
   var ts=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
@@ -1998,7 +2079,7 @@ document.getElementById('refresh-btn').addEventListener('click',refreshAll);
 
 /* ── Refresh All Jobs ─────────────────── */
 var _refreshAllRunning=false;
-var _REFRESH_ALL_SEQUENCE=['ingest','ingest-estimates','ingest-earnings','ingest-filings','ingest-insiders','run-scan','journal-capture'];
+var _REFRESH_ALL_SEQUENCE=['ingest','ingest-estimates','ingest-earnings','ingest-filings','ingest-insiders','run-scan','journal-capture','scan-themes'];
 
 async function runRefreshAll(){
   if(_refreshAllRunning)return;

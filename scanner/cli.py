@@ -1082,6 +1082,103 @@ def scan(
     conn.close()
 
 
+@app.command("scan-themes")
+def scan_themes(
+    scan_date: Annotated[
+        Optional[str],
+        typer.Option("--date", help="Scan date YYYY-MM-DD (default: latest price date)"),
+    ] = None,
+) -> None:
+    """Run theme basket scanner — RS vs benchmark ETF for all active themes."""
+    from scanner.db import get_connection
+    from scanner.signals.theme_scanner import compute_theme_scan
+
+    conn = get_connection()
+    try:
+        as_of = scan_date
+        if not as_of:
+            row = conn.execute("SELECT MAX(date) FROM prices").fetchone()
+            as_of = str(row[0]) if row and row[0] else str(date.today())
+
+        console.print(f"[bold cyan]Theme scan as of {as_of}[/bold cyan]")
+        results = compute_theme_scan(conn, as_of)
+    finally:
+        conn.close()
+
+    if not results:
+        console.print("[yellow]No theme results — run ingest first.[/yellow]")
+        return
+
+    _THEME_ACTIVE_STYLE = {"ACTIVE": "bold green", "NEUTRAL": "yellow", "INACTIVE": "red", "UNKNOWN": "dim"}
+
+    current_theme = None
+    table: Table | None = None
+
+    def _print_table():
+        if table is not None:
+            console.print(table)
+
+    for r in sorted(results, key=lambda x: (x["theme_name"], -(x["rs_score"] or -999))):
+        if r["theme_name"] != current_theme:
+            _print_table()
+            current_theme = r["theme_name"]
+            theme_label = r.get("theme_label", r["theme_name"])
+            theme_active = r["theme_active"]
+            ta_style = _THEME_ACTIVE_STYLE.get(theme_active, "")
+            table = Table(
+                title=f"{theme_label} [benchmark: {r['benchmark_etf']}]  [{ta_style}]{theme_active}[/{ta_style}]",
+                box=box.SIMPLE_HEAD,
+            )
+            table.add_column("Ticker", width=7)
+            table.add_column("Price", justify="right", width=9)
+            table.add_column("RS vs ETF", justify="right", width=10)
+            table.add_column("RS Trend", justify="center", width=9)
+            table.add_column("RVOL", justify="right", width=7)
+            table.add_column("RVOL Trnd", justify="center", width=10)
+            table.add_column("Confirm", justify="right", width=9)
+            table.add_column("50MA Days", justify="right", width=10)
+            table.add_column("Range%", justify="right", width=8)
+            table.add_column("Insiders", width=14)
+            table.add_column("Earnings", width=14)
+
+        def _fmt(v, decimals=2, pct=False, suffix=""):
+            if v is None:
+                return "—"
+            if pct:
+                return f"{v * 100:.1f}%"
+            return f"{v:.{decimals}f}{suffix}"
+
+        earnings_str = ""
+        ed = r.get("earnings_days")
+        if ed is not None:
+            if ed <= 2:
+                earnings_str = f"[red]TOMORROW ({ed}d)[/red]"
+            elif ed <= 7:
+                earnings_str = f"[orange1]~{ed}d[/orange1]"
+            elif ed <= 14:
+                earnings_str = f"[yellow]~{ed}d[/yellow]"
+
+        rs = r.get("rs_score")
+        rs_str = "—" if rs is None else f"{rs * 100:+.2f}%"
+
+        table.add_row(
+            r["ticker"],
+            _fmt(r.get("price"), decimals=2),
+            rs_str,
+            r.get("rs_trend") or "—",
+            _fmt(r.get("rvol"), decimals=2),
+            r.get("rvol_trend") or "—",
+            str(r.get("confirm", "—")),
+            str(r.get("days_above_50ma", "—")),
+            _fmt(r.get("price_range_pct"), decimals=1),
+            r.get("insider_annotation") or "",
+            earnings_str,
+        )
+
+    _print_table()
+    console.print(f"\n[dim]⚠ EXPLORATORY — backtesting pending. All signals show WATCH.[/dim]")
+
+
 _MEGACAP_LABEL_STYLE = {
     "LEADING": "bold green",
     "NEUTRAL": "yellow",

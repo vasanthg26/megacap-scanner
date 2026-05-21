@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 
 _LOOKBACK_YEARS = 3
 
+# Theme basket tickers + their benchmark ETFs + SPY (not in get_all_tickers()).
+_THEME_TICKERS: list[str] = [
+    "BB", "NOK", "AEHR", "HUT", "FPS", "BE", "YSS",  # theme tickers
+    "IGV", "IGN", "SMH", "WGMI", "GRID", "ITA",       # benchmark ETFs
+    "SPY",                                              # needed for theme_active computation
+]
+
 
 def _fetch_ohlcv(ticker: str, start: str, end: str) -> pd.DataFrame:
     """Fetch OHLCV from yfinance. Returns empty DataFrame on failure."""
@@ -65,7 +72,7 @@ def ingest_all(tickers: list[str] | None = None) -> dict[str, str]:
     end = datetime.today().strftime("%Y-%m-%d")
     start = (datetime.today() - timedelta(days=_LOOKBACK_YEARS * 365 + 5)).strftime("%Y-%m-%d")
 
-    universe = tickers or get_all_tickers()
+    universe = tickers or list(dict.fromkeys(get_all_tickers() + _THEME_TICKERS))
     results: dict[str, str] = {}
 
     with get_connection() as conn:

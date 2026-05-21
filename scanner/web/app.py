@@ -1210,6 +1210,53 @@ async def api_run_journal_capture():
     return {"status": "failed", "error": "Journal capture job failed — check server logs"}
 
 
+def _compute_theme_scan_sync() -> list[dict]:
+    from scanner.db import get_connection
+    from scanner.signals.theme_scanner import compute_theme_scan
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT MAX(date) FROM prices").fetchone()
+        as_of = str(row[0]) if row and row[0] else str(date.today())
+        return compute_theme_scan(conn, as_of)
+    finally:
+        conn.close()
+
+
+@app.get("/api/theme-scan")
+async def api_theme_scan():
+    cached = _cache_get("theme_scan")
+    if cached is not None:
+        return cached
+    results = await asyncio.to_thread(_compute_theme_scan_sync)
+    # Group by theme_name for convenient frontend rendering.
+    themes: dict[str, dict] = {}
+    for r in results:
+        tn = r["theme_name"]
+        if tn not in themes:
+            themes[tn] = {
+                "theme_name": tn,
+                "theme_label": r.get("theme_label", tn),
+                "benchmark_etf": r["benchmark_etf"],
+                "theme_active": r["theme_active"],
+                "tickers": [],
+            }
+        themes[tn]["tickers"].append(r)
+    payload = {"scan_date": results[0]["scan_date"] if results else None, "themes": list(themes.values())}
+    _cache_set("theme_scan", payload)
+    return payload
+
+
+@app.post("/api/run/scan-themes")
+async def api_run_scan_themes():
+    from scanner.web.scheduler import _job_scan_themes, scheduler_status
+    await asyncio.to_thread(_job_scan_themes)
+    _cache.pop("theme_scan", None)
+    if scheduler_status.get("last_theme_scan_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Theme scan job failed — check server logs"}
+
+
 @app.post("/api/run/all")
 async def api_run_all():
     from scanner.web.scheduler import (
@@ -1582,7 +1629,7 @@ async def api_journal_for_date(scan_date: str):
         rows = conn.execute(
             """SELECT scan_date, ticker, parent, parent_regime, price, rs_score,
                       rank, action_label, est_rev, rvol, confirm, insider_annotation,
-                      earnings_days, parent_20d_return, notes
+                      earnings_days, parent_20d_return, notes, signal_source
                FROM journal
                WHERE scan_date = ?
                ORDER BY parent, ticker""",
@@ -1590,7 +1637,7 @@ async def api_journal_for_date(scan_date: str):
         ).fetchall()
         cols = ["scan_date", "ticker", "parent", "parent_regime", "price", "rs_score",
                 "rank", "action_label", "est_rev", "rvol", "confirm", "insider_annotation",
-                "earnings_days", "parent_20d_return", "notes"]
+                "earnings_days", "parent_20d_return", "notes", "signal_source"]
         for r in rows:
             e = dict(zip(cols, r))
             if e["scan_date"] is not None:

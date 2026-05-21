@@ -169,6 +169,37 @@ CREATE TABLE IF NOT EXISTS signal_explanations (
     generated_at  TIMESTAMP,
     PRIMARY KEY (ticker, parent, scan_date)
 );
+
+CREATE TABLE IF NOT EXISTS themes (
+    theme_name    VARCHAR   NOT NULL,
+    ticker        VARCHAR   NOT NULL,
+    benchmark_etf VARCHAR   NOT NULL,
+    theme_label   VARCHAR   NOT NULL,
+    is_active     BOOLEAN   DEFAULT true,
+    added_date    DATE,
+    PRIMARY KEY (theme_name, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS theme_scan_results (
+    scan_date          DATE    NOT NULL,
+    ticker             VARCHAR NOT NULL,
+    theme_name         VARCHAR NOT NULL,
+    benchmark_etf      VARCHAR NOT NULL,
+    price              DOUBLE,
+    rs_score           DOUBLE,
+    rs_trend           VARCHAR,
+    rvol               DOUBLE,
+    rvol_trend         VARCHAR,
+    confirm            INTEGER,
+    days_above_50ma    INTEGER,
+    price_range_pct    DOUBLE,
+    est_rev            DOUBLE,
+    insider_annotation VARCHAR,
+    earnings_days      INTEGER,
+    theme_active       VARCHAR,
+    action_label       VARCHAR,
+    PRIMARY KEY (scan_date, ticker, theme_name)
+);
 """
 
 
@@ -186,9 +217,31 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             "ALTER TABLE filings_8k ADD COLUMN summary TEXT",
             "ALTER TABLE filings_8k ADD COLUMN sentiment VARCHAR",
             "ALTER TABLE filings_8k ADD COLUMN impact_explanation TEXT",
+            "ALTER TABLE journal ADD COLUMN signal_source VARCHAR DEFAULT 'dependency'",
         ]:
             try:
                 conn.execute(_stmt)
+            except Exception:
+                pass
+        # Seed theme basket data (idempotent — INSERT OR IGNORE on PK).
+        _THEME_SEED = [
+            ("cyber_security_edge_ai",      "BB",   "IGV",  "Cyber Security & Edge AI"),
+            ("telecom_optical",             "NOK",  "IGN",  "Telecom & Optical Infrastructure"),
+            ("semiconductor_testing",       "AEHR", "SMH",  "Semiconductor Testing Equipment"),
+            ("ai_compute_bitcoin",          "HUT",  "WGMI", "AI Data Centers & Bitcoin Infrastructure"),
+            ("smart_grid_electrical",       "FPS",  "GRID", "Smart Grid & Electrical Equipment"),
+            ("onsite_fuel_cells",           "BE",   "GRID", "On-site Solid-Oxide Fuel Cells"),
+            ("national_security_space",     "YSS",  "ITA",  "National Security Space Systems"),
+        ]
+        for theme_name, ticker, benchmark_etf, theme_label in _THEME_SEED:
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO themes (theme_name, ticker, benchmark_etf, theme_label, is_active, added_date)
+                    VALUES (?, ?, ?, ?, true, CURRENT_DATE)
+                    """,
+                    [theme_name, ticker, benchmark_etf, theme_label],
+                )
             except Exception:
                 pass
     return conn

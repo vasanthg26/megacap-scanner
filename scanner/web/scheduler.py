@@ -16,6 +16,7 @@ scheduler_status: dict[str, Any] = {
     "last_cleanup": None,
     "last_scan": None,
     "last_journal_capture": None,
+    "last_theme_scan": None,
     "last_ingest_ok": None,
     "last_estimates_ok": None,
     "last_insiders_ok": None,
@@ -24,6 +25,7 @@ scheduler_status: dict[str, Any] = {
     "last_cleanup_ok": None,
     "last_scan_ok": None,
     "last_journal_capture_ok": None,
+    "last_theme_scan_ok": None,
 }
 
 # Module-level reference set by lifespan so api_status can query it.
@@ -45,6 +47,7 @@ _JOB_META = {
     "cleanup_filings":  ("cleanup-filings",   "last_cleanup",    "last_cleanup_ok"),
     "run_scan":         ("run-scan",          "last_scan",       "last_scan_ok"),
     "journal_capture":  ("journal-capture",   "last_journal_capture", "last_journal_capture_ok"),
+    "scan_themes":      ("scan-themes",       "last_theme_scan",      "last_theme_scan_ok"),
 }
 
 
@@ -369,6 +372,38 @@ def _job_scan() -> None:
         _write_activity_log("run-scan", "error", str(exc)[:200])
 
 
+def _job_scan_themes() -> None:
+    from scanner.db import get_connection
+    from scanner.signals.theme_scanner import compute_theme_scan
+
+    logger.info("Scheduled job: theme basket scan starting")
+    try:
+        conn = get_connection()
+        try:
+            latest_row = conn.execute("SELECT MAX(date) FROM prices").fetchone()
+            as_of = str(latest_row[0]) if latest_row and latest_row[0] else None
+            if not as_of:
+                logger.warning("Theme scan job: no price data in DB — skipping")
+                scheduler_status["last_theme_scan_ok"] = False
+                scheduler_status["last_theme_scan"] = datetime.utcnow().isoformat()
+                _write_activity_log("scan-themes", "error", "no price data")
+                return
+            results = compute_theme_scan(conn, as_of)
+        finally:
+            conn.close()
+        scheduler_status["last_theme_scan_ok"] = True
+        scheduler_status["last_theme_scan"] = datetime.utcnow().isoformat()
+        logger.info("Theme scan complete: %d results for %s", len(results), as_of)
+        _write_activity_log("scan-themes", "success", f"{len(results)} theme tickers scanned for {as_of}")
+        from scanner.web.app import _cache
+        _cache.pop("theme_scan", None)
+    except Exception as exc:
+        scheduler_status["last_theme_scan"] = datetime.utcnow().isoformat()
+        scheduler_status["last_theme_scan_ok"] = False
+        logger.error("Theme scan job failed: %s", exc)
+        _write_activity_log("scan-themes", "error", str(exc)[:200])
+
+
 def create_scheduler():
     """Create and return a configured AsyncIOScheduler."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -445,6 +480,15 @@ def create_scheduler():
         CronTrigger(hour=9, minute=35, timezone="America/New_York"),
         id="journal_capture",
         name="journal-capture",
+        replace_existing=True,
+    )
+
+    # Daily 9:40 AM ET — theme basket scan (after journal capture)
+    scheduler.add_job(
+        _job_scan_themes,
+        CronTrigger(hour=9, minute=40, timezone="America/New_York"),
+        id="scan_themes",
+        name="scan-themes",
         replace_existing=True,
     )
 
