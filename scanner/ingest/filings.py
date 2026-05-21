@@ -140,12 +140,14 @@ def generate_filing_analysis(
         )
         h_msg = haiku.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=100,
+            max_tokens=200,
             messages=[{"role": "user", "content": haiku_prompt}],
         )
         facts = h_msg.content[0].text.strip() if h_msg.content else ""
+        if not facts:
+            logger.warning("generate_filing_analysis [%s]: Haiku returned empty facts", ticker)
     except Exception as exc:
-        logger.warning("Haiku fact extraction failed: %s", exc)
+        logger.error("generate_filing_analysis [%s]: Haiku failed: %s: %s", ticker, type(exc).__name__, exc)
         return None, None, None
 
     try:
@@ -164,24 +166,26 @@ def generate_filing_analysis(
         )
         s_msg = sonnet.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=150,
+            max_tokens=400,
             messages=[{"role": "user", "content": sonnet_prompt}],
         )
         raw = s_msg.content[0].text.strip() if s_msg.content else ""
+        logger.info("generate_filing_analysis [%s]: Sonnet raw (%d chars): %s", ticker, len(raw), raw[:300])
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
-            logger.warning("Sonnet filing analysis returned no JSON: %s", raw[:100])
+            logger.warning("generate_filing_analysis [%s]: no JSON in Sonnet response", ticker)
             return None, None, None
         import json
         data = json.loads(m.group())
         summary = (data.get("summary") or "").strip() or None
         sentiment = (data.get("sentiment") or "").strip().upper() or None
         if sentiment not in ("POSITIVE", "NEGATIVE", "NEUTRAL"):
+            logger.warning("generate_filing_analysis [%s]: unexpected sentiment %r", ticker, sentiment)
             sentiment = None
         impact_explanation = (data.get("impact") or "").strip() or None
         return summary, sentiment, impact_explanation
     except Exception as exc:
-        logger.warning("Sonnet filing analysis failed: %s", exc)
+        logger.error("generate_filing_analysis [%s]: Sonnet failed: %s: %s", ticker, type(exc).__name__, exc)
         return None, None, None
 
 
