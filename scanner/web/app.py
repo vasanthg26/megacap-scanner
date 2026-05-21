@@ -1038,7 +1038,6 @@ def generate_sentiments():
             SELECT id, ticker, filing_url, item_numbers, title
             FROM filings_8k
             WHERE summary IS NOT NULL
-            AND sentiment IS NULL
             AND filing_url IS NOT NULL
             ORDER BY filed_date DESC
             LIMIT 10
