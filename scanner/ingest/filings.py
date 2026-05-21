@@ -133,6 +133,7 @@ def generate_filing_analysis(
         return None, None, None
 
     text_cap = filing_text[:800]
+    logger.info("generate_filing_analysis: filing_text len=%d, text_cap len=%d", len(filing_text), len(text_cap))
     try:
         haiku_prompt = (
             f"Extract the key facts from this SEC 8-K filing as 3-4 bullet points. "
@@ -144,6 +145,7 @@ def generate_filing_analysis(
             messages=[{"role": "user", "content": haiku_prompt}],
         )
         facts = h_msg.content[0].text.strip() if h_msg.content else ""
+        logger.info("Haiku output (first 150): %s", facts[:150])
     except Exception as exc:
         logger.warning("Haiku fact extraction failed: %s", exc)
         return None, None, None
@@ -163,15 +165,18 @@ def generate_filing_analysis(
             messages=[{"role": "user", "content": sonnet_prompt}],
         )
         raw = s_msg.content[0].text.strip() if s_msg.content else ""
+        logger.info("Sonnet raw response (first 300): %s", raw[:300])
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
             logger.warning("Sonnet filing analysis returned no JSON: %s", raw[:100])
             return None, None, None
         import json
         data = json.loads(m.group())
+        logger.info("Parsed JSON result: %s", data)
         summary = (data.get("summary") or "").strip() or None
         sentiment = (data.get("sentiment") or "").strip().upper() or None
         if sentiment not in ("POSITIVE", "NEGATIVE", "NEUTRAL"):
+            logger.warning("Unexpected sentiment value after parse: %r — setting to None", sentiment)
             sentiment = None
         impact_explanation = (data.get("impact") or "").strip() or None
         return summary, sentiment, impact_explanation
