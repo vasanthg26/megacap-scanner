@@ -2718,6 +2718,78 @@ def backtest_themes() -> None:
     )
 
 
+@app.command("backtest-catalyst")
+def backtest_catalyst(
+    ticker: str = typer.Option("NOK", "--ticker", "-t", help="Ticker to backtest"),
+) -> None:
+    """Alternative signal backtest for a single ticker (est_rev, rvol, rs_vs_xlk)."""
+    from scanner.backtest.catalyst_runner import MIN_OBS, HORIZONS, SIGNALS, run_catalyst_backtest
+
+    console.print(f"[bold cyan]Running catalyst backtest for {ticker.upper()}...[/bold cyan]")
+    console.print(
+        "[dim]Signals: earnings revision score | RVOL spike | RS vs XLK\n"
+        "Horizons: 5d, 10d, 20d  |  PASS: IC > 0.05 at 10d or 20d, both halves positive, n >= 100[/dim]\n"
+    )
+
+    result = run_catalyst_backtest(ticker.upper())
+
+    def _fmt_ic(v: float) -> str:
+        if math.isnan(v):
+            return "[dim]n/a[/dim]"
+        color = "green" if v > 0.05 else ("yellow" if v > 0 else "red")
+        return f"[{color}]{v:+.3f}[/{color}]"
+
+    signal_labels = {
+        "est_rev": "Earnings Revision Score",
+        "rvol": "RVOL Spike (vol / 20d avg)",
+        "rs_vs_xlk": "RS vs XLK (20d diff)",
+    }
+
+    console.print(f"[bold]Catalyst Backtest - {result.ticker}[/bold]")
+    console.print("=" * 70)
+
+    for sr in result.signal_results:
+        label = signal_labels.get(sr.name, sr.name)
+        n_color = "green" if sr.n_obs >= MIN_OBS else "red"
+        console.print(f"\n[bold]{label}[/bold]  observations: [{n_color}]{sr.n_obs}[/{n_color}]")
+
+        if sr.n_obs < MIN_OBS:
+            console.print(
+                f"  [yellow]INSUFFICIENT DATA — need {MIN_OBS}+ observations "
+                f"(have {sr.n_obs}). Accumulate more history before interpreting.[/yellow]"
+            )
+            continue
+
+        t = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
+        t.add_column("Horizon", width=9)
+        t.add_column("IC (pooled)", justify="right", width=12)
+        t.add_column("H1", justify="right", width=10)
+        t.add_column("H2", justify="right", width=10)
+        t.add_column("Status", width=8)
+
+        for h in HORIZONS:
+            ic_full = sr.ic.get(h, float("nan"))
+            ic_h1 = sr.ic_h1.get(h, float("nan"))
+            ic_h2 = sr.ic_h2.get(h, float("nan"))
+            both_pos = (not math.isnan(ic_h1) and ic_h1 > 0) and (not math.isnan(ic_h2) and ic_h2 > 0)
+            status = (
+                "[green]PASS[/green]"
+                if not math.isnan(ic_full) and ic_full > 0.05 and both_pos
+                else "[dim]—[/dim]"
+            )
+            t.add_row(f"{h}d", _fmt_ic(ic_full), _fmt_ic(ic_h1), _fmt_ic(ic_h2), status)
+
+        console.print(t)
+        pass_str = "[green]PASS ✓[/green]" if sr.passes else "[red]FAIL[/red]"
+        console.print(f"  Signal verdict: {pass_str}")
+
+    console.print("\n" + "=" * 70)
+    console.print(
+        "\n[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
+        "Results overstate performance. Migrate to Polygon.io before trusting live numbers.[/dim]"
+    )
+
+
 def main() -> None:
     app()
 
