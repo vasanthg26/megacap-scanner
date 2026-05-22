@@ -1148,6 +1148,7 @@ def scan_themes(
             table.add_column("Confirm", justify="right", width=9)
             table.add_column("50MA Days", justify="right", width=10)
             table.add_column("Range%", justify="right", width=8)
+            table.add_column("Est Rev", justify="right", width=9)
             table.add_column("Insiders", width=14)
             table.add_column("Earnings", width=14)
 
@@ -1161,12 +1162,19 @@ def scan_themes(
         earnings_str = ""
         ed = r.get("earnings_days")
         if ed is not None:
-            if ed <= 2:
-                earnings_str = f"[red]TOMORROW ({ed}d)[/red]"
+            if ed == 0:
+                earnings_str = "[red bold]TODAY[/red bold]"
+            elif ed <= 2:
+                earnings_str = f"[red]~{ed}d[/red]"
             elif ed <= 7:
                 earnings_str = f"[orange1]~{ed}d[/orange1]"
             elif ed <= 14:
                 earnings_str = f"[yellow]~{ed}d[/yellow]"
+            else:
+                earnings_str = f"[dim]~{ed}d[/dim]"
+
+        est_rev = r.get("est_rev")
+        est_rev_str = "—" if est_rev is None else f"{est_rev:+.2f}"
 
         rs = r.get("rs_score")
         rs_str = "—" if rs is None else f"{rs * 100:+.2f}%"
@@ -1181,6 +1189,7 @@ def scan_themes(
             str(r.get("confirm", "—")),
             str(r.get("days_above_50ma", "—")),
             _fmt(r.get("price_range_pct"), decimals=1),
+            est_rev_str,
             r.get("insider_annotation") or "",
             earnings_str,
         )
