@@ -421,9 +421,15 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 /* ── Filings page ───────────────────── */
 #filings-filter-bar { display: flex; align-items: center; gap: 12px; margin: 14px 0 16px; flex-wrap: wrap; }
 #filings-universe-btns { display: flex; gap: 6px; }
+#filings-form-btns { display: flex; gap: 6px; }
 .f-uni-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 12px; border-radius: 4px; cursor: pointer; transition: all 0.12s ease; }
 .f-uni-btn:hover { border-color: var(--muted); color: var(--text); }
 .f-uni-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+.f-form-btn { background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 12px; border-radius: 4px; cursor: pointer; transition: all 0.12s ease; }
+.f-form-btn:hover { border-color: var(--muted); color: var(--text); }
+.f-form-btn.active { background: var(--orange,#e07b39); border-color: var(--orange,#e07b39); color: #fff; }
+.filing-row.s3-filing { border-left: 3px solid var(--red); }
+.dilution-badge { display: inline-block; background: rgba(220,50,50,0.15); color: var(--red); border: 1px solid var(--red); border-radius: 3px; font-size: 10px; padding: 2px 6px; margin-right: 4px; }
 #filings-search { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 5px 10px; border-radius: 4px; outline: none; width: 200px; transition: border-color 0.15s ease; }
 #filings-search::placeholder { color: var(--muted); }
 #filings-search:focus { border-color: var(--blue); }
@@ -685,13 +691,18 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 
     <!-- FILINGS -->
     <div class="page" id="page-filings">
-      <div class="page-title" style="border-left:2px solid var(--blue);padding-left:10px;">8-K Filings</div>
-      <div class="page-sub">Material SEC filings for the last 7 days</div>
+      <div class="page-title" style="border-left:2px solid var(--blue);padding-left:10px;">SEC Filings</div>
+      <div class="page-sub">Material SEC filings (8-K &amp; S-3) for the last 7 days</div>
       <div id="filings-filter-bar">
         <div id="filings-universe-btns">
           <button class="f-uni-btn active" data-universe="all">All</button>
           <button class="f-uni-btn" data-universe="megacap">Mega-caps</button>
           <button class="f-uni-btn" data-universe="dependent">Dependents</button>
+        </div>
+        <div id="filings-form-btns">
+          <button class="f-form-btn active" data-formtype="all">All Types</button>
+          <button class="f-form-btn" data-formtype="8-K">8-K</button>
+          <button class="f-form-btn" data-formtype="S-3">S-3</button>
         </div>
         <input id="filings-search" type="text" placeholder="Search keyword…" autocomplete="off">
       </div>
@@ -1777,6 +1788,7 @@ async function deleteObs(obsId){
 
 /* ── Filings ──────────────────────────── */
 var _filingsUniverse='all';
+var _filingsFormType='all';
 var _filingsSearch='';
 var _filingsData=null;
 
@@ -1865,9 +1877,14 @@ function renderFilings(){
   if(!c||!_filingsData)return;
   var groups=_filingsData.groups||[];
   var q=_filingsSearch.toLowerCase();
-  if(q){
+  if(_filingsFormType!=='all'||q){
     groups=groups.map(function(g){
       var filt=g.filings.filter(function(f){
+        var formOk=_filingsFormType==='all'
+          ||((_filingsFormType==='8-K')&&(f.form_type==='8-K'||f.form_type==='8-K/A'))
+          ||((_filingsFormType==='S-3')&&(f.form_type==='S-3'||f.form_type==='S-3/A'));
+        if(!formOk)return false;
+        if(!q)return true;
         return (f.title||'').toLowerCase().indexOf(q)>=0
           ||(f.description||'').toLowerCase().indexOf(q)>=0
           ||(f.item_numbers||'').toLowerCase().indexOf(q)>=0
@@ -1878,7 +1895,7 @@ function renderFilings(){
     }).filter(Boolean);
   }
   if(!groups.length){
-    c.innerHTML='<div class="filings-empty">No material 8-K filings in the last 7 days</div>';
+    c.innerHTML='<div class="filings-empty">No material SEC filings in the last 7 days</div>';
     return;
   }
   c.innerHTML=groups.map(function(g){
@@ -1897,13 +1914,16 @@ function renderFilings(){
 }
 
 function buildFilingRow(f){
+  var isS3=f.form_type==='S-3'||f.form_type==='S-3/A';
   var items=(f.item_numbers||'').split(',').filter(Boolean);
-  var pills=items.map(function(i){
-    var ic=i.trim();
-    var cls=_ITEM_PILL_CLASS[ic]||'item-pill-other';
-    var lbl=_ITEM_LABEL[ic]||ic;
-    return '<span class="item-pill '+cls+'">'+escHtml(lbl)+'</span>';
-  }).join('');
+  var pills=isS3
+    ?'<span class="dilution-badge">⚠️ Dilution Risk</span>'
+    :items.map(function(i){
+        var ic=i.trim();
+        var cls=_ITEM_PILL_CLASS[ic]||'item-pill-other';
+        var lbl=_ITEM_LABEL[ic]||ic;
+        return '<span class="item-pill '+cls+'">'+escHtml(lbl)+'</span>';
+      }).join('');
   var impCls=f.impact==='HIGH'?'impact-high':f.impact==='MEDIUM'?'impact-medium':'impact-low';
   var impSrc=f.impact_source==='manual'?' ✎':'';
   var impPill='<div class="impact-dropdown-wrap">'
@@ -1923,7 +1943,7 @@ function buildFilingRow(f){
   else if(f.sentiment==='NEUTRAL')sentPill='<span class="sentiment-pill sentiment-neutral">⚖️ Neutral</span>';
   var summaryHtml=summaryText?'<div class="filing-summary">'+escHtml(summaryText)+sentPill+'</div>':'';
   var impExpHtml=f.impact_explanation?'<div class="filing-impact-exp">'+escHtml(f.impact_explanation)+'</div>':'';
-  return '<div class="filing-row" id="frow-'+f.id+'">'
+  return '<div class="filing-row'+(isS3?' s3-filing':'')+'" id="frow-'+f.id+'">'
     +'<div class="filing-meta">'
     +'<span class="filing-date">'+escHtml(f.filed_date)+'</span>'
     +'<span class="filing-form">'+escHtml(f.form_type)+'</span>'
@@ -2062,6 +2082,13 @@ document.querySelectorAll('.f-uni-btn').forEach(function(btn){
     _filingsUniverse=btn.dataset.universe;
     document.querySelectorAll('.f-uni-btn').forEach(function(b){b.classList.toggle('active',b===btn);});
     loadFilings();
+  });
+});
+document.querySelectorAll('.f-form-btn').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    _filingsFormType=btn.dataset.formtype;
+    document.querySelectorAll('.f-form-btn').forEach(function(b){b.classList.toggle('active',b===btn);});
+    renderFilings();
   });
 });
 document.getElementById('filings-search').addEventListener('input',function(){

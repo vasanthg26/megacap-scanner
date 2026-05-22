@@ -232,6 +232,7 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             ("smart_grid_electrical",       "FPS",  "GRID", "Smart Grid & Electrical Equipment"),
             ("onsite_fuel_cells",           "BE",   "GRID", "On-site Solid-Oxide Fuel Cells"),
             ("national_security_space",     "YSS",  "ITA",  "National Security Space Systems"),
+            ("ai_power_semiconductors",     "NVTS", "SMH",  "AI Power Semiconductors"),
         ]
         for theme_name, ticker, benchmark_etf, theme_label in _THEME_SEED:
             try:

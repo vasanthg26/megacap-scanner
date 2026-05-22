@@ -19,9 +19,9 @@ _LOOKBACK_YEARS = 3
 
 # Theme basket tickers + their benchmark ETFs + SPY (not in get_all_tickers()).
 _THEME_TICKERS: list[str] = [
-    "BB", "NOK", "AEHR", "HUT", "FPS", "BE", "YSS",        # theme tickers
-    "IGV", "IGN", "SMH", "WGMI", "GRID", "XLI", "ITA",     # benchmark ETFs
-    "SPY",                                                    # needed for theme_active computation
+    "BB", "NOK", "AEHR", "HUT", "FPS", "BE", "YSS", "NVTS", # theme tickers
+    "IGV", "IGN", "SMH", "WGMI", "GRID", "XLI", "ITA",      # benchmark ETFs
+    "SPY",                                                     # needed for theme_active computation
 ]
 
 

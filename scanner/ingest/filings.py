@@ -354,7 +354,7 @@ def _fetch_filings_for_ticker(
     for i, (form, filed_str, accession, primary_doc) in enumerate(
         zip(forms, dates, accessions, primary_docs)
     ):
-        if form not in ("8-K", "8-K/A"):
+        if form not in ("8-K", "8-K/A", "S-3", "S-3/A"):
             continue
         try:
             filed = date.fromisoformat(filed_str)
@@ -363,20 +363,40 @@ def _fetch_filings_for_ticker(
         if filed < cutoff:
             continue
 
+        acc_clean = accession.replace("-", "")
+        filing_url = (
+            f"https://www.sec.gov/Archives/edgar/data/{int(cik)}"
+            f"/{acc_clean}/{primary_doc}"
+        )
+        title = descriptions[i] if i < len(descriptions) else None
+
+        if form in ("S-3", "S-3/A"):
+            results.append({
+                "ticker": ticker,
+                "filed_date": filed,
+                "accession_number": accession,
+                "form_type": form,
+                "item_numbers": "S-3: Shelf Registration",
+                "title": title,
+                "description": None,
+                "filing_url": filing_url,
+                "impact": "HIGH",
+                "impact_source": "auto",
+                "summary": (
+                    f"{ticker} filed Form S-3 shelf registration. "
+                    "This signals potential upcoming capital raise which may be dilutive to existing shareholders."
+                ),
+                "sentiment": "NEGATIVE",
+                "impact_explanation": None,
+            })
+            continue
+
         items_raw = items_list[i] if i < len(items_list) else ""
         material = _extract_material_items(items_raw)
         if not material:
             continue
 
         item_numbers = ",".join(material)
-        title = descriptions[i] if i < len(descriptions) else None
-
-        acc_clean = accession.replace("-", "")
-        filing_url = (
-            f"https://www.sec.gov/Archives/edgar/data/{int(cik)}"
-            f"/{acc_clean}/{primary_doc}"
-        )
-
         impact = _classify_impact(item_numbers, title, None, form)
 
         results.append({
@@ -455,10 +475,10 @@ def ingest_filings(
                     row = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM filings_8k").fetchone()
                     next_id = row[0]
 
-                    summary = None
-                    sentiment = None
-                    impact_explanation = None
-                    if summaries_enabled:
+                    summary = f.get("summary")
+                    sentiment = f.get("sentiment")
+                    impact_explanation = f.get("impact_explanation")
+                    if summaries_enabled and f["form_type"] not in ("S-3", "S-3/A"):
                         filing_text = _fetch_filing_text(f["filing_url"], session)
                         logger.debug(
                             "Filing text length for %s: %d",
