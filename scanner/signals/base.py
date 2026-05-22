@@ -240,7 +240,7 @@ def calc_price_range_pct(
     return (today_close - low_20d) / (high_20d - low_20d) * 100
 
 
-_AIPOWER_BASKET: list[str] = ["BE", "FPS", "CEG", "VST", "HUT", "NVTS"]
+_AIPOWER_BASKET: list[str] = ["BE", "FPS", "CEG", "VST", "HUT"]
 _AIPOWER_MIN_BASKET = 3
 
 
