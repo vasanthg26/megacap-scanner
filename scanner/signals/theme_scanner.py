@@ -16,6 +16,25 @@ from scanner.signals.confirmation import compute_confirmation_dependent
 
 logger = logging.getLogger(__name__)
 
+# Tickers with validated backtest evidence — receive action labels based on rs_score.
+# All others remain WATCH until evidence accumulates.
+VALIDATED_THEMES: set[str] = {"HUT", "NOK"}
+
+_RS_THRESHOLDS = [
+    (0.15, "STRONG_BUY"),
+    (0.05, "BUY"),
+    (-0.05, "HOLD"),
+]
+
+
+def _action_label_from_rs(rs_score: float | None) -> str:
+    if rs_score is None or math.isnan(rs_score):
+        return "WATCH"
+    for threshold, label in _RS_THRESHOLDS:
+        if rs_score >= threshold:
+            return label
+    return "SELL"
+
 
 def _calc_rs_vs_benchmark(
     ticker: str, benchmark: str, as_of: str, conn: duckdb.DuckDBPyConnection
@@ -222,7 +241,11 @@ def compute_theme_scan(conn: duckdb.DuckDBPyConnection, as_of: str) -> list[dict
                 "insider_annotation": insider_annotation or None,
                 "earnings_days": earnings_days,
                 "theme_active": theme_active,
-                "action_label": "WATCH",
+                "action_label": (
+                    _action_label_from_rs(None if math.isnan(rs_score) else rs_score)
+                    if ticker in VALIDATED_THEMES
+                    else "WATCH"
+                ),
             }
             results.append(result)
         except Exception as exc:

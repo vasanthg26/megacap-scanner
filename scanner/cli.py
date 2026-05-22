@@ -6,6 +6,10 @@ import sys
 from datetime import date
 from typing import Annotated, Optional
 
+# Ensure Unicode output works on Windows terminals with cp1252 default encoding.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -1121,12 +1125,29 @@ def scan_themes(
 
     _THEME_ACTIVE_STYLE = {"ACTIVE": "bold green", "NEUTRAL": "yellow", "INACTIVE": "red", "UNKNOWN": "dim"}
 
+    _VALIDATED_FOOTNOTES = {
+        "HUT": "[dim]  Validated: IC +0.062 at 10d (WGMI benchmark)[/dim]",
+        "NOK": "[dim]  Validated post-pivot (2024+): IC +0.124 at 20d (XLK benchmark) -- limited history[/dim]",
+    }
+
+    _ACTION_LABEL_STYLE = {
+        "STRONG_BUY": "bold green",
+        "BUY": "green",
+        "HOLD": "yellow",
+        "SELL": "red",
+        "WATCH": "dim",
+    }
+
     current_theme = None
     table: Table | None = None
+    pending_footnotes: list[str] = []
 
     def _print_table():
         if table is not None:
             console.print(table)
+        for fn in pending_footnotes:
+            console.print(fn)
+        pending_footnotes.clear()
 
     for r in sorted(results, key=lambda x: (x["theme_name"], -(x["rs_score"] or -999))):
         if r["theme_name"] != current_theme:
@@ -1140,6 +1161,7 @@ def scan_themes(
                 box=box.SIMPLE_HEAD,
             )
             table.add_column("Ticker", width=7)
+            table.add_column("Signal", width=11)
             table.add_column("Price", justify="right", width=9)
             table.add_column("RS vs ETF", justify="right", width=10)
             table.add_column("RS Trend", justify="center", width=9)
@@ -1179,8 +1201,13 @@ def scan_themes(
         rs = r.get("rs_score")
         rs_str = "—" if rs is None else f"{rs * 100:+.2f}%"
 
+        action = r.get("action_label", "WATCH")
+        action_style = _ACTION_LABEL_STYLE.get(action, "dim")
+        action_cell = f"[{action_style}]{action}[/{action_style}]"
+
         table.add_row(
             r["ticker"],
+            action_cell,
             _fmt(r.get("price"), decimals=2),
             rs_str,
             r.get("rs_trend") or "—",
@@ -1194,8 +1221,14 @@ def scan_themes(
             earnings_str,
         )
 
+        if r["ticker"] in _VALIDATED_FOOTNOTES:
+            pending_footnotes.append(_VALIDATED_FOOTNOTES[r["ticker"]])
+
     _print_table()
-    console.print(f"\n[dim]⚠ EXPLORATORY — backtesting pending. All signals show WATCH.[/dim]")
+    console.print(
+        "\n[dim]Validated: HUT (WGMI), NOK (XLK post-2024)\n"
+        "Exploratory: BB, BE, AEHR, FPS, YSS -- backtesting pending or insufficient edge[/dim]"
+    )
 
 
 _MEGACAP_LABEL_STYLE = {

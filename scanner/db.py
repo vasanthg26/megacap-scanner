@@ -226,7 +226,7 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
         # Seed theme basket data (idempotent — INSERT OR IGNORE on PK).
         _THEME_SEED = [
             ("cyber_security_edge_ai",      "BB",   "IGV",  "Cyber Security & Edge AI"),
-            ("telecom_optical",             "NOK",  "IGN",  "Telecom & Optical Infrastructure"),
+            ("telecom_optical",             "NOK",  "XLK",  "Telecom & Optical Infrastructure"),
             ("semiconductor_testing",       "AEHR", "SMH",  "Semiconductor Testing Equipment"),
             ("ai_compute_bitcoin",          "HUT",  "WGMI", "AI Data Centers & Bitcoin Infrastructure"),
             ("smart_grid_electrical",       "FPS",  "GRID", "Smart Grid & Electrical Equipment"),
