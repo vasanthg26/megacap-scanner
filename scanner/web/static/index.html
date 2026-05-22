@@ -1215,9 +1215,9 @@ function renderThemes(data,c){
   var scanDate=data.scan_date||'';
   if(!themes.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No theme results — run scan-themes first.</div>';return;}
   var ACTIVE_STYLE={'ACTIVE':'color:#4ade80;font-weight:700','NEUTRAL':'color:#facc15','INACTIVE':'color:#f87171','UNKNOWN':'color:var(--dim)'};
-  var W=[72,68,72,80,72,72,68,72,80,120,110];
-  var L=['Ticker','Price','RS vs ETF','RS Trend','RVOL','RVOL Trnd','Confirm','50MA','Range%','Insiders','Earnings'];
-  var A=['left','','','center','','center','','','','left','left'];
+  var W=[72,68,72,80,72,72,68,72,80,80,120,110];
+  var L=['Ticker','Price','RS vs ETF','RS Trend','RVOL','RVOL Trnd','Confirm','50MA','Range%','Signal','Insiders','Earnings'];
+  var A=['left','','','center','','center','','','','center','left','left'];
   var html='';
   themes.forEach(function(theme){
     var ta=theme.theme_active||'UNKNOWN';
@@ -1238,6 +1238,9 @@ function renderThemes(data,c){
       var earnH=row.earnings_days!=null?('<span style="'+earningsStyle(row.earnings_days)+'">'+earningsLabel(row.earnings_days)+'</span>'):'<span style="color:var(--dim)">—</span>';
       var rsTrend=trendArrow(row.rs_trend||'');
       var rvolTrend=trendArrow(row.rvol_trend||'');
+      var al=(row.action_label||'WATCH').toUpperCase();
+      var alColor=al==='STRONG_BUY'?'var(--green)':al==='BUY'?'var(--green)':al==='HOLD'?'var(--yellow)':al==='SELL'?'var(--red)':'var(--dim)';
+      var alH='<span style="color:'+alColor+';font-size:11px;font-weight:700;">'+al+'</span>';
       return '<tr>'
         +'<td class="left"><span class="ticker-cell" data-symbol="'+row.ticker+'">'+row.ticker+'</span></td>'
         +'<td>'+fmt2(row.price)+'</td>'
@@ -1245,9 +1248,10 @@ function renderThemes(data,c){
         +'<td style="text-align:center">'+rsTrend+'</td>'
         +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+'</td>'
         +'<td style="text-align:center">'+rvolTrend+'</td>'
-        +'<td>'+(cfN!=null?'<span class="'+confClass(cfN,4)+'">'+cfN+'/4</span>':'<span class="conf-low">—</span>')+'</td>'
+        +'<td>'+(cfN!=null?'<span class="'+confClass(cfN,5)+'">'+cfN+'/5</span>':'<span class="conf-low">—</span>')+'</td>'
         +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
         +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
+        +'<td style="text-align:center">'+alH+'</td>'
         +'<td class="left">'+insH+'</td>'
         +'<td class="left">'+earnH+'</td>'
         +'</tr>';

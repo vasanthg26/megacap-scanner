@@ -1192,6 +1192,22 @@ def clear_high_filings():
     return {"deleted": "ok"}
 
 
+@app.get("/api/admin/fix-theme-benchmarks")
+def fix_theme_benchmarks():
+    from scanner.db import get_connection
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE themes SET benchmark_etf = 'XLK' WHERE ticker IN ('BB', 'NOK')"
+        )
+        result = conn.execute(
+            "SELECT ticker, benchmark_etf FROM themes ORDER BY ticker"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {"themes": [{"ticker": r[0], "benchmark_etf": r[1]} for r in result]}
+
+
 @app.post("/api/run/run-scan")
 async def api_run_scan():
     from scanner.web.scheduler import _job_scan, scheduler_status
