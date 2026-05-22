@@ -549,7 +549,17 @@ def ingest_insiders(
     from scanner.graph.loader import get_all_tickers
     from scanner.ingest.insiders import _load_cik_map, _make_session, ingest_form4
 
-    universe = tickers or get_all_tickers()
+    if tickers:
+        universe = tickers
+    else:
+        _conn = get_connection()
+        try:
+            theme_tickers = [r[0] for r in _conn.execute("SELECT DISTINCT ticker FROM themes").fetchall()]
+        except Exception:
+            theme_tickers = []
+        finally:
+            _conn.close()
+        universe = list(dict.fromkeys(get_all_tickers() + theme_tickers))
     console.print(
         f"[bold cyan]Ingesting Form 4 filings for {len(universe)} tickers "
         f"({lookback_days}d lookback)...[/bold cyan]"

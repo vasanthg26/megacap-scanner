@@ -93,7 +93,9 @@ def ingest_estimates(tickers: list[str] | None = None, as_of: date | None = None
     if tickers:
         universe = list(dict.fromkeys(tickers))
     else:
-        universe = list(dict.fromkeys(MEGACAP_UNIVERSE + get_all_tickers()))
+        with get_connection() as _conn:
+            theme_tickers = [r[0] for r in _conn.execute("SELECT DISTINCT ticker FROM themes").fetchall()]
+        universe = list(dict.fromkeys(MEGACAP_UNIVERSE + get_all_tickers() + theme_tickers))
 
     today = as_of or date.today()
     results: dict[str, str] = {}

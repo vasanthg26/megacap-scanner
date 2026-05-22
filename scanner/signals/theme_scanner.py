@@ -92,8 +92,10 @@ def _get_insider_annotation(
 ) -> tuple[str, bool]:
     """Return (annotation_string, has_buying) for insider enrichment."""
     try:
+        from datetime import date as _date
         from scanner.enrichment.insiders import get_insider_summary
-        summary = get_insider_summary(ticker, as_of, conn)
+        as_of_date = _date.fromisoformat(as_of) if isinstance(as_of, str) else as_of
+        summary = get_insider_summary(ticker, as_of_date, conn)
         if not summary:
             return ("", False)
         buy_count = summary.get("buy_count", 0)

@@ -32,18 +32,25 @@ def _fetch_next_earnings(ticker: str) -> date | None:
         return None
 
 
+def _get_theme_tickers(conn) -> list[str]:
+    try:
+        return [r[0] for r in conn.execute("SELECT DISTINCT ticker FROM themes").fetchall()]
+    except Exception:
+        return []
+
+
 def ingest_earnings(tickers: list[str] | None = None) -> dict[str, str]:
     """
     Fetch next earnings dates for universe tickers (or a subset) into DuckDB.
     Returns a status dict: ticker -> 'ok' | 'null' | 'error'.
     Idempotent: re-running overwrites existing rows.
     """
-    universe = tickers or get_all_tickers()
     results: dict[str, str] = {}
     ingested_at = datetime.now(timezone.utc)
 
     conn = get_connection()
     try:
+        universe = tickers or list(dict.fromkeys(get_all_tickers() + _get_theme_tickers(conn)))
         for ticker in universe:
             try:
                 next_date = _fetch_next_earnings(ticker)

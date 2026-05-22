@@ -213,8 +213,12 @@ def _job_insiders() -> None:
     try:
         session = _make_session()
         cik_map = _load_cik_map(session)
-        universe = get_all_tickers()
         conn = get_connection()
+        try:
+            theme_tickers = [r[0] for r in conn.execute("SELECT DISTINCT ticker FROM themes").fetchall()]
+        except Exception:
+            theme_tickers = []
+        universe = list(dict.fromkeys(get_all_tickers() + theme_tickers))
         total_rows = 0
         errors = 0
         try:
