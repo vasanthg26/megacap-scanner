@@ -1277,6 +1277,7 @@ async def api_run_scan_themes():
 async def api_run_all():
     from scanner.web.scheduler import (
         _job_ingest, _job_estimates, _job_earnings, _job_filings, _job_insiders,
+        _job_journal_capture, _job_scan_themes,
         scheduler_status,
     )
     SEQUENCE = [
@@ -1310,14 +1311,33 @@ async def api_run_all():
         latest_date = str(latest_row[0]) if latest_row and latest_row[0] else None
         if not latest_date:
             logger.warning("run-all: no price data in DB — skipping scan")
-            results.append({"job": "scan", "status": "skipped-no-data"})
+            results.append({"job": "run-scan", "status": "skipped-no-data"})
         else:
             logger.info("run-all: latest price date=%s — running scan", latest_date)
             await asyncio.to_thread(_run_scan_today_sync, latest_date)
-            results.append({"job": "scan", "status": "success"})
+            results.append({"job": "run-scan", "status": "success"})
     except Exception as exc:
         logger.error("run-all: scan raised: %s", exc)
-        results.append({"job": "scan", "status": "failed"})
+        results.append({"job": "run-scan", "status": "failed"})
+
+    # Step 7: journal capture
+    try:
+        await asyncio.to_thread(_job_journal_capture)
+        ok = scheduler_status.get("last_journal_capture_ok", False)
+    except Exception as exc:
+        logger.error("run-all: journal-capture raised: %s", exc)
+        ok = False
+    results.append({"job": "journal-capture", "status": "success" if ok else "failed"})
+
+    # Step 8: theme scan
+    try:
+        await asyncio.to_thread(_job_scan_themes)
+        _cache.pop("theme_scan", None)
+        ok = scheduler_status.get("last_theme_scan_ok", False)
+    except Exception as exc:
+        logger.error("run-all: scan-themes raised: %s", exc)
+        ok = False
+    results.append({"job": "scan-themes", "status": "success" if ok else "failed"})
 
     any_failed = any(r["status"] != "success" for r in results)
     return {"status": "partial" if any_failed else "complete", "results": results}

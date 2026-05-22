@@ -2129,7 +2129,7 @@ async function runRefreshAll(){
     var ep=_JOB_ENDPOINTS[jobName];
     var ok=false;
     try{
-      var resp=await fetch(ep,{method:'POST'});
+      var resp=await fetch(ep,{method:'POST',signal:AbortSignal.timeout(600000)});
       var data=await resp.json();
       ok=data.status==='success';
     }catch(err){
