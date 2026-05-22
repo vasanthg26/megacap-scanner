@@ -807,7 +807,7 @@ def scan(
     from scanner.graph.loader import MEGA_CAPS, get_dependents
     from scanner.signals.relative_strength import RelativeStrengthVsParent
     from scanner.enrichment.insiders import get_insider_summary
-    from scanner.signals.base import Action, classify_action, score_rank, classify_regime, TRADEABLE_REGIMES, VALIDATED_PARENTS
+    from scanner.signals.base import Action, classify_action, score_rank, classify_regime, TRADEABLE_REGIMES, VALIDATED_PARENTS, calc_basket_zscore
 
     as_of = scan_date or str(date.today())
     as_of_date = date.fromisoformat(as_of)
@@ -966,6 +966,7 @@ def scan(
         table.add_column("Confirm", justify="right", width=9)
         table.add_column("50MA", justify="right", width=6)
         table.add_column("Range", justify="right", width=8)
+        table.add_column("Z", justify="right", width=8)
         if show_insiders:
             table.add_column("Insiders (30d)", width=14)
 
@@ -1032,6 +1033,9 @@ def scan(
             base_cells.append(_fmt_confirm(confirm_score, 5))
             base_cells.append(_fmt_days_above_50ma(days_50ma_counts.get(ticker, 0)))
             base_cells.append(_fmt_price_range_pct(price_range_pcts.get(ticker, float("nan"))))
+            z = calc_basket_zscore(ticker, as_of, conn)
+            z_str = f"[green]{z:+.2f}[/green]" if z is not None and z >= 0 else (f"[red]{z:+.2f}[/red]" if z is not None else "[dim]—[/dim]")
+            base_cells.append(z_str)
             if show_insiders:
                 base_cells.append(_fmt_insider(ins))
             table.add_row(*base_cells)
@@ -2905,6 +2909,333 @@ def backtest_catalyst(
     console.print(
         "[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
         "Results overstate performance. Migrate to Polygon.io before trusting live numbers.[/dim]\n"
+    )
+
+
+@app.command("scan-aipower")
+def scan_aipower(
+    scan_date: Annotated[
+        Optional[str],
+        typer.Option("--date", help="Scan date YYYY-MM-DD (default: latest price date)"),
+    ] = None,
+) -> None:
+    """Live Z-score × RVOL scan for the AI Power Infrastructure basket (BE, FPS, CEG, VST, HUT)."""
+    import bisect
+    from collections import defaultdict
+    from scanner.db import get_connection
+
+    _BASKET = ["BE", "FPS", "CEG", "VST", "HUT"]
+    _LOOKBACK = 20
+    _MIN_BASKET = 3
+
+    conn = get_connection()
+    try:
+        as_of = scan_date
+        if not as_of:
+            row = conn.execute(
+                f"SELECT MAX(date) FROM prices WHERE ticker IN ({','.join('?' for _ in _BASKET)})",
+                _BASKET,
+            ).fetchone()
+            as_of = str(row[0]) if row and row[0] else str(date.today())
+
+        placeholders = ",".join("?" for _ in _BASKET)
+        rows = conn.execute(
+            f"SELECT ticker, CAST(date AS VARCHAR), adj_close, volume "
+            f"FROM prices WHERE ticker IN ({placeholders}) AND date <= ? "
+            f"ORDER BY ticker, date",
+            _BASKET + [as_of],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        console.print("[yellow]No price data found for basket. Run ingest first.[/yellow]")
+        return
+
+    ticker_dates: dict[str, list[str]] = defaultdict(list)
+    ticker_closes: dict[str, list[float]] = defaultdict(list)
+    ticker_vols: dict[str, list[float]] = defaultdict(list)
+    for tkr, dt, close, vol in rows:
+        ticker_dates[tkr].append(dt)
+        ticker_closes[tkr].append(float(close))
+        ticker_vols[tkr].append(float(vol) if vol is not None else 0.0)
+
+    # --- Compute signals for each ticker on as_of ---
+    basket_rets: dict[str, float] = {}
+    basket_rvols: dict[str, float] = {}
+    ticker_prices: dict[str, float] = {}
+    ticker_latest_dates: dict[str, str] = {}
+
+    for tkr in _BASKET:
+        dates = ticker_dates.get(tkr, [])
+        closes = ticker_closes.get(tkr, [])
+        vols = ticker_vols.get(tkr, [])
+        if not dates:
+            continue
+
+        idx = bisect.bisect_right(dates, as_of) - 1
+        if idx < 0:
+            continue
+
+        ticker_latest_dates[tkr] = dates[idx]
+        ticker_prices[tkr] = closes[idx]
+
+        if idx < _LOOKBACK:
+            continue
+
+        close_now = closes[idx]
+        close_20d_ago = closes[idx - _LOOKBACK]
+        if close_20d_ago == 0:
+            continue
+        basket_rets[tkr] = (close_now - close_20d_ago) / close_20d_ago
+
+        avg_vol = sum(vols[idx - _LOOKBACK:idx]) / _LOOKBACK
+        if avg_vol > 0:
+            basket_rvols[tkr] = vols[idx] / avg_vol
+
+    if len(basket_rets) < _MIN_BASKET:
+        console.print(
+            f"[yellow]Only {len(basket_rets)} tickers have 20d history on {as_of} "
+            f"(need {_MIN_BASKET}+). Run ingest first.[/yellow]"
+        )
+        return
+
+    ret_vals = list(basket_rets.values())
+    basket_mean = sum(ret_vals) / len(ret_vals)
+    n = len(ret_vals)
+    basket_std = math.sqrt(sum((r - basket_mean) ** 2 for r in ret_vals) / n)
+
+    # --- Build per-ticker result rows ---
+    _ACTION_THRESHOLDS = [
+        (1.5, "STRONG_BUY"),
+        (0.5, "BUY"),
+        (-0.5, "HOLD"),
+    ]
+    _ACTION_STYLE = {
+        "STRONG_BUY": "bold green",
+        "BUY": "green",
+        "HOLD": "yellow",
+        "SELL": "red",
+        "—": "dim",
+    }
+
+    def _action(combined: float) -> str:
+        if math.isnan(combined):
+            return "—"
+        for threshold, label in _ACTION_THRESHOLDS:
+            if combined > threshold:
+                return label
+        return "SELL"
+
+    scan_rows = []
+    for tkr in _BASKET:
+        price = ticker_prices.get(tkr)
+        latest_dt = ticker_latest_dates.get(tkr, "—")
+        ret_20d = basket_rets.get(tkr)
+        rvol = basket_rvols.get(tkr, float("nan"))
+
+        if ret_20d is None or basket_std == 0:
+            z = float("nan")
+            combined = float("nan")
+        else:
+            z = (ret_20d - basket_mean) / basket_std
+            combined = z * rvol if not math.isnan(rvol) else float("nan")
+
+        scan_rows.append({
+            "ticker": tkr,
+            "price": price,
+            "latest_date": latest_dt,
+            "ret_20d": ret_20d,
+            "z_score": z,
+            "rvol": rvol,
+            "combined": combined,
+            "action": _action(combined),
+        })
+
+    # Sort: STRONG_BUY first, then by combined desc, NaN last
+    _order = {"STRONG_BUY": 0, "BUY": 1, "HOLD": 2, "SELL": 3, "—": 4}
+    scan_rows.sort(key=lambda r: (_order.get(r["action"], 4), -(r["combined"] if not math.isnan(r.get("combined", float("nan"))) else -999)))
+
+    # --- Render ---
+    def _fmt(v, decimals=2, pct=False, sign=False):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "—"
+        if pct:
+            return f"{v * 100:+.2f}%" if sign else f"{v * 100:.2f}%"
+        fmt = f"{v:+.{decimals}f}" if sign else f"{v:.{decimals}f}"
+        return fmt
+
+    def _color_z(v: float) -> str:
+        if math.isnan(v):
+            return "[dim]—[/dim]"
+        c = "green" if v > 0 else "red"
+        return f"[{c}]{v:+.3f}[/{c}]"
+
+    def _color_rvol(v: float) -> str:
+        if math.isnan(v):
+            return "[dim]—[/dim]"
+        c = "green" if v >= 1.5 else ("yellow" if v >= 1.0 else "dim")
+        return f"[{c}]{v:.2f}x[/{c}]"
+
+    def _color_combined(v: float) -> str:
+        if math.isnan(v):
+            return "[dim]—[/dim]"
+        c = "bold green" if v > 1.5 else ("green" if v > 0.5 else ("yellow" if v > -0.5 else "red"))
+        return f"[{c}]{v:+.3f}[/{c}]"
+
+    std_display = f"{basket_std * 100:.2f}%" if basket_std > 0 else "0%"
+    mean_display = f"{basket_mean * 100:+.2f}%"
+    table = Table(
+        title=(
+            f"AI Power Infrastructure — Z-Score × RVOL  |  {as_of}\n"
+            f"Basket 20d avg return: {mean_display}  |  basket σ: {std_display}  |  "
+            f"n={len(basket_rets)} tickers with 20d history"
+        ),
+        box=box.SIMPLE_HEAD,
+    )
+    table.add_column("Ticker", width=7)
+    table.add_column("Signal", width=12)
+    table.add_column("Price", justify="right", width=9)
+    table.add_column("20d Ret", justify="right", width=9)
+    table.add_column("Z-Score", justify="right", width=9)
+    table.add_column("RVOL", justify="right", width=8)
+    table.add_column("Combined", justify="right", width=10)
+    table.add_column("Data Date", width=12)
+
+    for r in scan_rows:
+        action = r["action"]
+        style = _ACTION_STYLE.get(action, "dim")
+        table.add_row(
+            r["ticker"],
+            f"[{style}]{action}[/{style}]",
+            _fmt(r["price"], decimals=2),
+            _fmt(r["ret_20d"], pct=True, sign=True) if r["ret_20d"] is not None else "—",
+            _color_z(r["z_score"]),
+            _color_rvol(r["rvol"]),
+            _color_combined(r["combined"]),
+            r["latest_date"],
+        )
+
+    console.print(table)
+    console.print(
+        "[dim]Thresholds: combined > +1.5 → STRONG_BUY  |  > +0.5 → BUY  |  "
+        "> -0.5 → HOLD  |  ≤ -0.5 → SELL\n"
+        "Validated: Z-score × RVOL passes IC > 0.05 at 5d and 10d (post-2024 backtest).[/dim]\n"
+    )
+
+
+@app.command("backtest-zscore")
+def backtest_zscore() -> None:
+    """Cross-sectional Z-score backtest for AI Power Infrastructure basket (BE, FPS, CEG, VST, HUT)."""
+    from scanner.backtest.zscore_runner import (
+        BASKET,
+        HORIZONS,
+        _MIN_OBS_FULL,
+        _MIN_OBS_POST2024,
+        run_zscore_backtest,
+    )
+
+    console.print("[bold cyan]Running AI Power Infrastructure Z-Score backtest...[/bold cyan]")
+    console.print("[dim]Loading price+volume history from DuckDB...[/dim]\n")
+
+    pair = run_zscore_backtest()
+
+    if pair is None:
+        console.print(
+            "[yellow]Insufficient data: no price rows found for basket tickers.[/yellow]\n"
+            f"[dim]Run [bold]scanner ingest[/bold] for: {', '.join(BASKET)}[/dim]"
+        )
+        return
+
+    full_result, post2024_result = pair
+
+    def _fmt_ic(v: float) -> str:
+        if math.isnan(v):
+            return "[dim]  n/a[/dim]"
+        c = "green" if v > 0.05 else ("yellow" if v > 0 else "red")
+        return f"[{c}]{v:+.4f}[/{c}]"
+
+    def _pass_label(ic_pool: float, ic_h1: float, ic_h2: float, n: int, min_n: int) -> str:
+        if n < min_n:
+            return "[dim]INSUF DATA[/dim]"
+        if math.isnan(ic_pool) or math.isnan(ic_h1) or math.isnan(ic_h2):
+            return "[dim]n/a[/dim]"
+        passes = ic_pool > 0.05 and ic_h1 > 0 and ic_h2 > 0
+        return "[green]PASS[/green]" if passes else "[red]FAIL[/red]"
+
+    def _render_version(result, min_n: int) -> None:
+        if result is None:
+            console.print("[yellow]No data for this window.[/yellow]\n")
+            return
+
+        console.print(
+            f"[bold]Ticker observations (5d-horizon):[/bold]  "
+            + "  ".join(f"{t}: {result.ticker_obs.get(t, 0)}" for t in BASKET)
+        )
+        console.print(
+            f"Total signal-date pairs: {result.total_obs}  "
+            f"({result.start_date} to {result.end_date}  |  "
+            f"H1 n={result.n_h1}  H2 n={result.n_h2}  |  mid={result.mid_date})"
+        )
+        console.print()
+
+        # Z-score alone
+        z_table = Table(title="Signal: Z-score alone", box=box.SIMPLE_HEAD)
+        z_table.add_column("Horizon", width=10)
+        z_table.add_column("IC pooled", justify="right", width=12)
+        z_table.add_column("H1", justify="right", width=10)
+        z_table.add_column("H2", justify="right", width=10)
+        z_table.add_column("Status", width=12)
+        for h in HORIZONS:
+            ip = result.ic_pooled.get(h, float("nan"))
+            h1 = result.ic_h1.get(h, float("nan"))
+            h2 = result.ic_h2.get(h, float("nan"))
+            z_table.add_row(
+                f"{h}d",
+                _fmt_ic(ip),
+                _fmt_ic(h1),
+                _fmt_ic(h2),
+                _pass_label(ip, h1, h2, result.total_obs, min_n),
+            )
+        console.print(z_table)
+
+        # Z-score × RVOL
+        c_table = Table(title="Signal: Z-score × RVOL", box=box.SIMPLE_HEAD)
+        c_table.add_column("Horizon", width=10)
+        c_table.add_column("IC pooled", justify="right", width=12)
+        c_table.add_column("H1", justify="right", width=10)
+        c_table.add_column("H2", justify="right", width=10)
+        c_table.add_column("Status", width=12)
+        for h in HORIZONS:
+            ip = result.ic_combined_pooled.get(h, float("nan"))
+            h1 = result.ic_combined_h1.get(h, float("nan"))
+            h2 = result.ic_combined_h2.get(h, float("nan"))
+            c_table.add_row(
+                f"{h}d",
+                _fmt_ic(ip),
+                _fmt_ic(h1),
+                _fmt_ic(h2),
+                _pass_label(ip, h1, h2, result.total_obs, min_n),
+            )
+        console.print(c_table)
+
+    console.rule("[bold]AI Power Infrastructure — Z-Score Backtest[/bold]")
+    console.print(f"Basket: {', '.join(BASKET)}")
+    console.print("Method: Cross-sectional Z-score (20d return within basket)\n")
+
+    console.rule("[FULL HISTORY]", style="dim")
+    _render_version(full_result, _MIN_OBS_FULL)
+
+    console.rule("[POST-2024 ONLY]", style="dim")
+    _render_version(post2024_result, _MIN_OBS_POST2024)
+
+    console.print(
+        "[dim]PASS criteria: IC pooled > 0.05 at 10d or 20d, both H1 and H2 positive, "
+        f"n >= {_MIN_OBS_FULL} (full) or n >= {_MIN_OBS_POST2024} (post-2024).[/dim]"
+    )
+    console.print(
+        "[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
+        "Results overstate performance.[/dim]\n"
     )
 
 

@@ -366,6 +366,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
     from scanner.signals.base import (
         classify_action, score_rank, classify_regime,
         TRADEABLE_REGIMES, VALIDATED_PARENTS,
+        calc_basket_zscore,
     )
     from scanner.signals.confirmation import compute_confirmation_dependent
 
@@ -491,6 +492,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
                         above_50ma=above_50ma,
                     )
 
+                    z = calc_basket_zscore(ticker, scan_date, conn)
                     rows_out.append({
                         "ticker": ticker,
                         "parent": parent,
@@ -511,6 +513,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
                         "rs_trend": rs_trend_flags.get((ticker, parent), "—"),
                         "days_above_50ma": days_50ma_counts.get(ticker, 0),
                         "price_range_pct": _nan_to_none(price_range_pcts.get(ticker, float("nan"))),
+                        "z_score": z,
                     })
 
             groups.append({

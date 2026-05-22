@@ -240,6 +240,64 @@ def calc_price_range_pct(
     return (today_close - low_20d) / (high_20d - low_20d) * 100
 
 
+_AIPOWER_BASKET: list[str] = ["BE", "FPS", "CEG", "VST", "HUT"]
+_AIPOWER_MIN_BASKET = 3
+
+
+def calc_basket_zscore(
+    ticker: str,
+    as_of: str,
+    conn: duckdb.DuckDBPyConnection,
+    basket: list[str] | None = None,
+) -> float | None:
+    """Cross-sectional Z-score of ticker's 20d return within its AI Power basket.
+
+    Returns None if ticker not in basket, insufficient basket data, or std == 0.
+    """
+    if basket is None:
+        basket = _AIPOWER_BASKET
+    if ticker not in basket:
+        return None
+
+    placeholders = ",".join("?" for _ in basket)
+    rows = conn.execute(
+        f"""
+        SELECT ticker, adj_close, rn FROM (
+            SELECT ticker, adj_close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices WHERE ticker IN ({placeholders}) AND date <= ?
+        ) t WHERE rn <= 21
+        """,
+        basket + [as_of],
+    ).fetchall()
+
+    closes: dict[str, list[float | None]] = {}
+    for tkr, c, rn in rows:
+        if tkr not in closes:
+            closes[tkr] = [None] * 21
+        if rn <= 21:
+            closes[tkr][rn - 1] = float(c) if c is not None else None
+
+    ret_20d: dict[str, float] = {}
+    for tkr in basket:
+        c = closes.get(tkr, [None] * 21)
+        if c[0] is None or c[20] is None or c[20] == 0:
+            continue
+        ret_20d[tkr] = (c[0] - c[20]) / c[20]
+
+    if len(ret_20d) < _AIPOWER_MIN_BASKET or ticker not in ret_20d:
+        return None
+
+    vals = list(ret_20d.values())
+    n = len(vals)
+    mean = sum(vals) / n
+    std = math.sqrt(sum((r - mean) ** 2 for r in vals) / n)
+    if std == 0:
+        return None
+
+    return (ret_20d[ticker] - mean) / std
+
+
 def generate_signal_explanation(
     ticker: str,
     parent: str,

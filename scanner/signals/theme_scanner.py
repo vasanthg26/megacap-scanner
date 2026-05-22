@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import duckdb
 
 from scanner.signals.base import (
+    calc_basket_zscore,
     calc_days_above_50ma,
     calc_price_range_pct,
     calc_rs_trend,
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 # All others remain WATCH until evidence accumulates.
 # BE: post-2024 H2 flips negative — revisit November 2026.
 VALIDATED_THEMES: set[str] = {"HUT", "NOK", "BB"}
+
+# AI Power basket tickers that use Z-score for action labels instead of rs_score.
+_ZSCORE_ACTION_TICKERS: set[str] = {"BE", "FPS", "HUT"}
 
 _RS_THRESHOLDS = [
     (0.15, "STRONG_BUY"),
@@ -35,6 +39,18 @@ def _action_label_from_rs(rs_score: float | None) -> str:
         if rs_score >= threshold:
             return label
     return "SELL"
+
+
+def _action_label_from_zscore(z: float | None) -> str:
+    if z is None:
+        return "WATCH"
+    if z > 1.5:
+        return "STRONG_BUY(z)"
+    if z > 0.5:
+        return "BUY(z)"
+    if z > -0.5:
+        return "HOLD(z)"
+    return "SELL(z)"
 
 
 def _calc_rs_vs_benchmark(
@@ -224,6 +240,15 @@ def compute_theme_scan(conn: duckdb.DuckDBPyConnection, as_of: str) -> list[dict
                 above_50ma=above_50ma,
             )
 
+            z_score = calc_basket_zscore(ticker, as_of, conn)
+
+            if ticker in _ZSCORE_ACTION_TICKERS:
+                action_label = _action_label_from_zscore(z_score)
+            elif ticker in VALIDATED_THEMES:
+                action_label = _action_label_from_rs(None if math.isnan(rs_score) else rs_score)
+            else:
+                action_label = "WATCH"
+
             result = {
                 "scan_date": as_of,
                 "ticker": ticker,
@@ -242,11 +267,8 @@ def compute_theme_scan(conn: duckdb.DuckDBPyConnection, as_of: str) -> list[dict
                 "insider_annotation": insider_annotation or None,
                 "earnings_days": earnings_days,
                 "theme_active": theme_active,
-                "action_label": (
-                    _action_label_from_rs(None if math.isnan(rs_score) else rs_score)
-                    if ticker in VALIDATED_THEMES
-                    else "WATCH"
-                ),
+                "action_label": action_label,
+                "z_score": z_score,
             }
             results.append(result)
         except Exception as exc:

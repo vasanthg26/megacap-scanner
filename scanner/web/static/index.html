@@ -1147,9 +1147,9 @@ function renderScan(data,c,dateElId,subStyle){
   var asOf=data.as_of||'';
   if(asOf&&dateElId){var de=document.getElementById(dateElId);if(de)de.textContent=subStyle?'as of '+fmtDate(asOf):fmtDate(asOf);}
   if(!groups.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No scan results</div>';return;}
-  var W=[48,80,72,88,96,160,72,88,72,54,60,128,120];
-  var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','50MA','Range','Insiders','Earnings'];
-  var A=['left','left','left','','','left','','','','','','left','left'];
+  var W=[48,80,72,88,96,160,72,88,72,54,60,64,128,120];
+  var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','50MA','Range','Z-Score','Insiders','Earnings'];
+  var A=['left','left','left','','','left','','','','','','','left','left'];
   var tb=groups.map(function(grp){
     var parent=grp.parent||'OTHER',regime=grp.parent_regime||'';
     var ret20d=grp.parent_20d_return!=null?grp.parent_20d_return:null;
@@ -1186,6 +1186,7 @@ function renderScan(data,c,dateElId,subStyle){
         +'<td>'+cfH+'</td>'
         +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
         +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
+        +'<td>'+(row.z_score!=null?'<span style="color:'+(row.z_score>=0?'var(--green)':'var(--red)')+'">'+((row.z_score>=0?'+':'')+row.z_score.toFixed(2))+'</span>':'<span style="color:var(--dim)">—</span>')+'</td>'
         +'<td class="left">'+insH+'</td>'
         +'<td class="left">'+earnH+'</td></tr>';
     }).join('');
@@ -1215,9 +1216,9 @@ function renderThemes(data,c){
   var scanDate=data.scan_date||'';
   if(!themes.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No theme results — run scan-themes first.</div>';return;}
   var ACTIVE_STYLE={'ACTIVE':'color:#4ade80;font-weight:700','NEUTRAL':'color:#facc15','INACTIVE':'color:#f87171','UNKNOWN':'color:var(--dim)'};
-  var W=[72,68,72,80,72,72,68,72,80,80,120,110];
-  var L=['Ticker','Price','RS vs ETF','RS Trend','RVOL','RVOL Trnd','Confirm','50MA','Range%','Signal','Insiders','Earnings'];
-  var A=['left','','','center','','center','','','','center','left','left'];
+  var W=[72,68,72,80,72,72,68,72,80,64,80,120,110];
+  var L=['Ticker','Price','RS vs ETF','RS Trend','RVOL','RVOL Trnd','Confirm','50MA','Range%','Z-Score','Signal','Insiders','Earnings'];
+  var A=['left','','','center','','center','','','','','center','left','left'];
   var html='';
   themes.forEach(function(theme){
     var ta=theme.theme_active||'UNKNOWN';
@@ -1251,6 +1252,7 @@ function renderThemes(data,c){
         +'<td>'+(cfN!=null?'<span class="'+confClass(cfN,5)+'">'+cfN+'/5</span>':'<span class="conf-low">—</span>')+'</td>'
         +'<td>'+fmtDaysAbove50ma(row.days_above_50ma)+'</td>'
         +'<td>'+fmtRangePct(row.price_range_pct)+'</td>'
+        +'<td>'+(row.z_score!=null?'<span style="color:'+(row.z_score>=0?'var(--green)':'var(--red)')+'">'+((row.z_score>=0?'+':'')+row.z_score.toFixed(2))+'</span>':'<span style="color:var(--dim)">—</span>')+'</td>'
         +'<td style="text-align:center">'+alH+'</td>'
         +'<td class="left">'+insH+'</td>'
         +'<td class="left">'+earnH+'</td>'
