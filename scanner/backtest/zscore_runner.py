@@ -1,6 +1,6 @@
 """Cross-sectional Z-score backtest for AI Power Infrastructure basket.
 
-Basket: BE, FPS, CEG, VST, HUT
+Basket: BE, FPS, CEG, VST, HUT, NVTS
 Signal: 20-day return cross-sectional Z-score within basket
 Combined: Z-score × RVOL ratio
 
@@ -20,7 +20,7 @@ from scanner.db import get_connection
 
 logger = logging.getLogger(__name__)
 
-BASKET = ["BE", "FPS", "CEG", "VST", "HUT"]
+BASKET = ["BE", "FPS", "CEG", "VST", "HUT", "NVTS"]
 HORIZONS = (5, 10, 20)
 _LOOKBACK = 20
 _MIN_BASKET = 3
