@@ -128,10 +128,27 @@ def _get_earnings_days(ticker: str, as_of: str, conn: duckdb.DuckDBPyConnection)
         if not row or row[0] is None:
             return None
         from datetime import date
-        as_of_date = date.fromisoformat(as_of)
-        delta = (row[0] - as_of_date).days
+        as_of_date = date.fromisoformat(as_of) if isinstance(as_of, str) else as_of
+        earnings_date = row[0].date() if hasattr(row[0], "date") and callable(row[0].date) else row[0]
+        delta = (earnings_date - as_of_date).days
         return delta if delta >= 0 else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("earnings days calc failed for %s: %s", ticker, exc)
+        return None
+
+
+def _get_est_rev(ticker: str, as_of: str, conn: duckdb.DuckDBPyConnection) -> float | None:
+    """Latest revision_score from estimates table as of as_of, or None."""
+    row = conn.execute(
+        "SELECT revision_score FROM estimates WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
+        [ticker, as_of],
+    ).fetchone()
+    if not row or row[0] is None:
+        return None
+    try:
+        v = float(row[0])
+        return None if math.isnan(v) else v
+    except (TypeError, ValueError):
         return None
 
 
@@ -171,12 +188,13 @@ def compute_theme_scan(conn: duckdb.DuckDBPyConnection, as_of: str) -> list[dict
             theme_active = _calc_theme_active(benchmark_etf, as_of, conn)
             insider_annotation, has_buying = _get_insider_annotation(ticker, as_of, conn)
             earnings_days = _get_earnings_days(ticker, as_of, conn)
+            est_rev = _get_est_rev(ticker, as_of, conn)
 
             above_50ma = days_above > 0
             confirm = compute_confirmation_dependent(
                 rs_score=rs_score,
                 rvol=rvol if not math.isnan(rvol) else float("nan"),
-                rev_score=None,
+                rev_score=est_rev,
                 insider_buying=has_buying,
                 above_50ma=above_50ma,
             )
@@ -195,7 +213,7 @@ def compute_theme_scan(conn: duckdb.DuckDBPyConnection, as_of: str) -> list[dict
                 "confirm": confirm,
                 "days_above_50ma": days_above,
                 "price_range_pct": None if math.isnan(price_range_pct) else price_range_pct,
-                "est_rev": None,
+                "est_rev": est_rev,
                 "insider_annotation": insider_annotation or None,
                 "earnings_days": earnings_days,
                 "theme_active": theme_active,
