@@ -16,9 +16,12 @@ from scanner.signals.confirmation import compute_confirmation_dependent
 
 logger = logging.getLogger(__name__)
 
-# Tickers with validated backtest evidence — receive action labels based on rs_score.
-# All others remain WATCH until evidence accumulates.
-VALIDATED_THEMES: set[str] = {"HUT", "NOK"}
+# Tickers with validated backtest evidence — receive action labels (not WATCH).
+# HUT/NOK/BB: RS-based labels. BE: RVOL-based labels (volume spike signal validated).
+VALIDATED_THEMES: set[str] = {"HUT", "NOK", "BB", "BE"}
+
+# BE uses RVOL not RS — listed here to document the distinction.
+_RVOL_VALIDATED: set[str] = {"BE"}
 
 _RS_THRESHOLDS = [
     (0.15, "STRONG_BUY"),
@@ -34,6 +37,17 @@ def _action_label_from_rs(rs_score: float | None) -> str:
         if rs_score >= threshold:
             return label
     return "SELL"
+
+
+def _action_label_be(rvol: float | None, rvol_trend: str | None) -> str:
+    """BE action label driven by volume spike, not RS."""
+    if rvol is None or math.isnan(rvol):
+        return "WATCH"
+    if rvol >= 2.0:
+        return "STRONG_BUY"
+    if rvol >= 1.5 and rvol_trend == "up":
+        return "BUY"
+    return "WATCH"
 
 
 def _calc_rs_vs_benchmark(
@@ -242,7 +256,9 @@ def compute_theme_scan(conn: duckdb.DuckDBPyConnection, as_of: str) -> list[dict
                 "earnings_days": earnings_days,
                 "theme_active": theme_active,
                 "action_label": (
-                    _action_label_from_rs(None if math.isnan(rs_score) else rs_score)
+                    _action_label_be(rvol if not math.isnan(rvol) else None, rvol_trend)
+                    if ticker in _RVOL_VALIDATED
+                    else _action_label_from_rs(None if math.isnan(rs_score) else rs_score)
                     if ticker in VALIDATED_THEMES
                     else "WATCH"
                 ),
