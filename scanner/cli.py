@@ -2751,31 +2751,41 @@ def backtest_themes() -> None:
     )
 
 
+_TICKER_BENCHMARKS: dict[str, str] = {
+    "BB": "IGV",
+    "AEHR": "SMH",
+    "BE": "GRID",
+    "NOK": "XLK",
+    "HUT": "WGMI",
+    "FPS": "GRID",
+    "YSS": "ITA",
+}
+
+_POST_PIVOT_DATE = "2024-01-01"
+_FULL_MIN_OBS = 100
+_PIVOT_MIN_OBS = 30
+
+
 @app.command("backtest-catalyst")
 def backtest_catalyst(
-    ticker: str = typer.Option("NOK", "--ticker", "-t", help="Ticker to backtest"),
-    start_date: str | None = typer.Option(None, "--start-date", help="Filter to dates >= YYYY-MM-DD (post-pivot window)"),
+    tickers: list[str] = typer.Argument(None, help="Tickers to backtest (e.g. BB AEHR BE)"),
+    ticker_opt: str | None = typer.Option(None, "--ticker", "-t", help="Single ticker (alternative to positional args)"),
+    start_date: str | None = typer.Option(None, "--start-date", help="Override: use only this single window"),
 ) -> None:
-    """Alternative signal backtest for a single ticker (rvol, rs_vs_xlk, rs_vs_ign)."""
-    from scanner.backtest.catalyst_runner import DEFAULT_MIN_OBS, HORIZONS, SIGNALS, run_catalyst_backtest
+    """Alternative signal backtest — rvol, rs_vs_xlk, rs_vs_benchmark.
 
-    min_obs = DEFAULT_MIN_OBS
-    console.print(f"[bold cyan]Running catalyst backtest for {ticker.upper()}...[/bold cyan]")
-    window_note = f"from {start_date} onwards" if start_date else "full history"
-    console.print(
-        f"[dim]Signals: RVOL spike | RS vs XLK | RS vs IGN\n"
-        f"Window: {window_note}  |  Horizons: 5d, 10d, 20d  |  PASS: IC > 0.05 at 10d or 20d, both halves positive, n >= {min_obs}[/dim]"
-    )
+    Runs two windows automatically per ticker: full history (n>=100) and post-2024 (n>=30).
+    Benchmarks: BB=IGV, AEHR=SMH, BE=GRID, NOK=XLK, HUT=WGMI. Use --start-date to force one window.
+    """
+    from scanner.backtest.catalyst_runner import HORIZONS, run_catalyst_backtest
 
-    if start_date:
-        console.print(
-            "\n[yellow]Post-pivot sample only (from " + start_date + ")\n"
-            "Pre-pivot data excluded -- different business regime\n"
-            "Treat as early-stage signal with limited history[/yellow]"
-        )
-
-    console.print()
-    result = run_catalyst_backtest(ticker.upper(), start_date=start_date, min_obs=min_obs)
+    all_tickers: list[str] = []
+    if tickers:
+        all_tickers = [t.upper() for t in tickers]
+    if ticker_opt:
+        all_tickers.append(ticker_opt.upper())
+    if not all_tickers:
+        all_tickers = ["NOK"]
 
     def _fmt_ic(v: float) -> str:
         if math.isnan(v):
@@ -2783,54 +2793,117 @@ def backtest_catalyst(
         color = "green" if v > 0.05 else ("yellow" if v > 0 else "red")
         return f"[{color}]{v:+.3f}[/{color}]"
 
-    signal_labels = {
-        "rvol": "RVOL Spike (vol / 20d avg)",
-        "rs_vs_xlk": "RS vs XLK (20d diff)",
-        "rs_vs_ign": "RS vs IGN (20d diff)",
+    def _best_signal(signal_results) -> tuple[str, float]:
+        """Return (signal_name, best_ic) for the signal with highest passing IC at 10d/20d."""
+        best_name, best_ic = "", float("nan")
+        for sr in signal_results:
+            for h in (10, 20):
+                ic = sr.ic.get(h, float("nan"))
+                if not math.isnan(ic) and (math.isnan(best_ic) or ic > best_ic):
+                    best_ic = ic
+                    best_name = sr.name
+        return best_name, best_ic
+
+    def _verdict(signal_results, min_obs: int) -> str:
+        any_pass = any(sr.passes for sr in signal_results)
+        all_insuf = all(sr.n_obs < min_obs for sr in signal_results)
+        if all_insuf:
+            return "INSUFFICIENT DATA"
+        if any_pass:
+            return "ACTIVATE"
+        any_positive = any(
+            not math.isnan(sr.ic.get(h, float("nan"))) and sr.ic.get(h, 0.0) > 0
+            for sr in signal_results for h in (10, 20)
+        )
+        return "WATCH" if any_positive else "WATCH"
+
+    _signal_label_map = {
+        "rvol": "RVOL Spike",
+        "rs_vs_xlk": "RS vs XLK",
+        "rs_vs_benchmark": "RS vs {bm}",
     }
 
-    console.print(f"[bold]Catalyst Backtest - {result.ticker}[/bold]")
-    console.print("=" * 70)
-
-    for sr in result.signal_results:
-        label = signal_labels.get(sr.name, sr.name)
-        n_color = "green" if sr.n_obs >= min_obs else "red"
-        console.print(f"\n[bold]{label}[/bold]  observations: [{n_color}]{sr.n_obs}[/{n_color}]")
-
-        if sr.n_obs < min_obs:
-            console.print(
-                f"  [yellow]INSUFFICIENT DATA -- need {min_obs}+ observations "
-                f"(have {sr.n_obs}). Accumulate more history before interpreting.[/yellow]"
-            )
-            continue
-
-        t = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
-        t.add_column("Horizon", width=9)
-        t.add_column("IC (pooled)", justify="right", width=12)
-        t.add_column("H1", justify="right", width=10)
-        t.add_column("H2", justify="right", width=10)
-        t.add_column("Status", width=8)
-
-        for h in HORIZONS:
-            ic_full = sr.ic.get(h, float("nan"))
-            ic_h1 = sr.ic_h1.get(h, float("nan"))
-            ic_h2 = sr.ic_h2.get(h, float("nan"))
-            both_pos = (not math.isnan(ic_h1) and ic_h1 > 0) and (not math.isnan(ic_h2) and ic_h2 > 0)
-            status = (
-                "[green]PASS[/green]"
-                if not math.isnan(ic_full) and ic_full > 0.05 and both_pos
-                else "[dim]--[/dim]"
-            )
-            t.add_row(f"{h}d", _fmt_ic(ic_full), _fmt_ic(ic_h1), _fmt_ic(ic_h2), status)
-
-        console.print(t)
-        pass_str = "[green]PASS[/green]" if sr.passes else "[red]FAIL[/red]"
-        console.print(f"  Signal verdict: {pass_str}")
-
-    console.print("\n" + "=" * 70)
     console.print(
-        "\n[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
-        "Results overstate performance. Migrate to Polygon.io before trusting live numbers.[/dim]"
+        f"\n[bold cyan]Catalyst Backtest[/bold cyan]  |  "
+        f"Signals: RVOL | RS vs XLK | RS vs benchmark  |  Horizons: 5d/10d/20d"
+    )
+    console.print(
+        "[dim]PASS: IC > 0.05 at 10d or 20d, both halves positive, n >= threshold[/dim]\n"
+    )
+
+    for tkr in all_tickers:
+        benchmark = _TICKER_BENCHMARKS.get(tkr, "XLK")
+
+        if start_date:
+            windows = [(start_date, _PIVOT_MIN_OBS, f"from {start_date} (forced)")]
+        else:
+            windows = [
+                (None, _FULL_MIN_OBS, f"Full history  (n >= {_FULL_MIN_OBS})"),
+                (_POST_PIVOT_DATE, _PIVOT_MIN_OBS, f"Post-2024     (n >= {_PIVOT_MIN_OBS}, from {_POST_PIVOT_DATE})"),
+            ]
+
+        console.print(f"[bold]{'=' * 72}[/bold]")
+        console.print(f"[bold]{tkr}[/bold]  vs benchmark: [cyan]{benchmark}[/cyan]")
+        console.print(f"[bold]{'=' * 72}[/bold]")
+
+        for win_start, win_min_obs, win_label in windows:
+            result = run_catalyst_backtest(
+                tkr, benchmark=benchmark, start_date=win_start, min_obs=win_min_obs
+            )
+
+            verdict = _verdict(result.signal_results, win_min_obs)
+            verdict_style = {
+                "ACTIVATE": "bold green",
+                "WATCH": "yellow",
+                "INSUFFICIENT DATA": "dim",
+            }.get(verdict, "white")
+
+            best_name, best_ic = _best_signal(result.signal_results)
+            best_label = _signal_label_map.get(best_name, best_name).replace("{bm}", benchmark)
+            best_str = f"{best_label} (IC {best_ic:+.3f})" if not math.isnan(best_ic) else "--"
+
+            console.print(f"\n[bold]{win_label}[/bold]")
+            console.print(f"  Verdict: [{verdict_style}]{verdict}[/{verdict_style}]   Best signal: {best_str}")
+
+            def _ic_plain(v: float) -> str:
+                if math.isnan(v):
+                    return "   n/a"
+                return f"{v:+.3f}"
+
+            def _col(v: str) -> str:
+                try:
+                    f = float(v.strip())
+                    color = "green" if f > 0.05 else ("yellow" if f > 0 else "red")
+                    return f"[{color}]{v}[/{color}]"
+                except ValueError:
+                    return f"[dim]{v}[/dim]"
+
+            hdr = f"  {'Signal':<16} {'n':>4}  {'IC10':>6} {'IC20':>6}  {'H1/10':>6} {'H2/10':>6}  {'H1/20':>6} {'H2/20':>6}  Res"
+            console.print(f"[dim]{hdr}[/dim]")
+            console.print(f"[dim]  {'-'*77}[/dim]")
+            for sr in result.signal_results:
+                sig_label = _signal_label_map.get(sr.name, sr.name).replace("{bm}", benchmark)
+                n_color = "red" if sr.n_obs < win_min_obs else "white"
+                ic10 = _ic_plain(sr.ic.get(10, float("nan")))
+                ic20 = _ic_plain(sr.ic.get(20, float("nan")))
+                h1_10 = _ic_plain(sr.ic_h1.get(10, float("nan")))
+                h2_10 = _ic_plain(sr.ic_h2.get(10, float("nan")))
+                h1_20 = _ic_plain(sr.ic_h1.get(20, float("nan")))
+                h2_20 = _ic_plain(sr.ic_h2.get(20, float("nan")))
+                pass_str = "[green]PASS[/green]" if sr.passes else "[dim]  --[/dim]"
+
+                console.print(
+                    f"  {sig_label:<16} [{n_color}]{sr.n_obs:>4}[/{n_color}]  "
+                    f"{_col(ic10)} {_col(ic20)}  "
+                    f"{_col(h1_10)} {_col(h2_10)}  "
+                    f"{_col(h1_20)} {_col(h2_20)}  {pass_str}"
+                )
+
+        console.print()
+
+    console.print(
+        "[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
+        "Results overstate performance. Migrate to Polygon.io before trusting live numbers.[/dim]\n"
     )
 
 

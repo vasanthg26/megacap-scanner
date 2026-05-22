@@ -1,9 +1,9 @@
 """Alternative signal backtest for a single ticker — candidate signals.
 
 Signals:
-  1. rvol      — today's volume / 20-day average volume
-  2. rs_vs_xlk — 20-day return of ticker minus 20-day return of XLK
-  3. rs_vs_ign — 20-day return of ticker minus 20-day return of IGN
+  1. rvol           — today's volume / 20-day average volume
+  2. rs_vs_xlk      — 20-day return of ticker minus 20-day return of XLK
+  3. rs_vs_benchmark — 20-day return of ticker minus 20-day return of per-ticker benchmark ETF
 
 Supports optional start_date to restrict observations to a post-pivot window.
 
@@ -25,7 +25,7 @@ HORIZONS = (5, 10, 20)
 LOOKBACK = 20
 DEFAULT_MIN_OBS = 30
 
-SIGNALS = ("rvol", "rs_vs_xlk", "rs_vs_ign")
+SIGNALS = ("rvol", "rs_vs_xlk", "rs_vs_benchmark")
 
 
 @dataclass
@@ -41,6 +41,7 @@ class SignalResult:
 @dataclass
 class CatalystBacktestResult:
     ticker: str
+    benchmark: str
     start_date: str | None
     signal_results: list[SignalResult] = field(default_factory=list)
 
@@ -164,10 +165,15 @@ def _eval_signal(signal_name: str, obs: list[dict], min_obs: int) -> SignalResul
 
 def run_catalyst_backtest(
     ticker: str,
+    benchmark: str = "XLK",
     start_date: str | None = None,
     min_obs: int = DEFAULT_MIN_OBS,
 ) -> CatalystBacktestResult:
-    """Run all candidate signals for `ticker`, optionally filtered to start_date onwards."""
+    """Run all candidate signals for `ticker`, optionally filtered to start_date onwards.
+
+    `benchmark` is used for Signal 3 (rs_vs_benchmark) and is ticker-specific
+    (e.g. BB -> IGV, AEHR -> SMH, BE -> GRID, NOK -> XLK, HUT -> WGMI).
+    """
     conn = get_connection()
     try:
         # Price dates within the post-pivot window (signals still look back LOOKBACK days
@@ -179,7 +185,7 @@ def run_catalyst_backtest(
         signal_fns = {
             "rvol": lambda t, dt, c: _signal_rvol(t, dt, c),
             "rs_vs_xlk": lambda t, dt, c: _signal_rs_vs(t, "XLK", dt, c),
-            "rs_vs_ign": lambda t, dt, c: _signal_rs_vs(t, "IGN", dt, c),
+            "rs_vs_benchmark": lambda t, dt, c: _signal_rs_vs(t, benchmark, dt, c),
         }
 
         all_obs: dict[str, list[dict]] = {s: [] for s in SIGNALS}
@@ -202,6 +208,7 @@ def run_catalyst_backtest(
 
     return CatalystBacktestResult(
         ticker=ticker,
+        benchmark=benchmark,
         start_date=start_date,
         signal_results=signal_results,
     )
