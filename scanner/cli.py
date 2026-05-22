@@ -1129,7 +1129,6 @@ def scan_themes(
         "HUT": "[dim]  Validated: IC +0.062 at 10d (WGMI benchmark)[/dim]",
         "NOK": "[dim]  Validated post-pivot (2024+): IC +0.124 at 20d (XLK benchmark) -- limited history[/dim]",
         "BB":  "[dim]  Validated post-pivot (2024+): IC +0.239 at 20d (XLK benchmark)[/dim]",
-        "BE":  "[dim]  Validated RVOL signal: IC +0.144 at 10d (volume spike only)[/dim]",
     }
 
     _ACTION_LABEL_STYLE = {
@@ -1228,8 +1227,8 @@ def scan_themes(
 
     _print_table()
     console.print(
-        "\n[dim]Validated: HUT (WGMI), NOK (XLK 2024+), BB (XLK 2024+), BE (RVOL only)\n"
-        "Exploratory: AEHR, FPS, YSS -- insufficient edge or data[/dim]"
+        "\n[dim]Validated: HUT (WGMI), NOK (XLK 2024+), BB (XLK 2024+)\n"
+        "Exploratory: BE, AEHR, FPS, YSS -- insufficient edge or data[/dim]"
     )
 
 
