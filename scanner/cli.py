@@ -2624,6 +2624,100 @@ def backtest_rotation() -> None:
     )
 
 
+@app.command("backtest-themes")
+def backtest_themes() -> None:
+    """Walk-forward backtest of RS vs benchmark ETF signal for all active theme tickers."""
+    from scanner.backtest.theme_runner import MIN_OBS, HORIZONS, run_theme_backtest
+
+    console.print("[bold cyan]Running theme basket backtest...[/bold cyan]")
+    console.print(
+        "[dim]Signal: 20-day return of ticker minus 20-day return of benchmark ETF\n"
+        "Horizons: 5d, 10d, 20d  |  PASS: IC > 0.05 at 10d or 20d, both halves positive[/dim]\n"
+    )
+
+    result = run_theme_backtest()
+
+    if not result.ticker_results:
+        console.print(
+            "[yellow]No theme tickers found. Run 'scanner ingest' first.[/yellow]"
+        )
+        return
+
+    def _fmt_ic(v: float) -> str:
+        if math.isnan(v):
+            return "[dim]n/a[/dim]"
+        color = "green" if v > 0.05 else ("yellow" if v > 0 else "red")
+        return f"[{color}]{v:+.3f}[/{color}]"
+
+    def _fmt_n(n: int) -> str:
+        if n < MIN_OBS:
+            return f"[red]{n}[/red]"
+        return str(n)
+
+    console.print(f"[bold]Theme Basket Backtest Results[/bold]")
+    console.print("═" * 70)
+
+    current_theme = None
+    for r in result.ticker_results:
+        if r.theme_name != current_theme:
+            current_theme = r.theme_name
+            console.print(f"\n[bold]{r.theme_label.upper()}[/bold]")
+
+        console.print(
+            f"  Ticker: [bold]{r.ticker}[/bold]  Benchmark: {r.benchmark_etf}  "
+            f"Observations: {_fmt_n(r.n_obs)}"
+        )
+
+        if r.n_obs < MIN_OBS:
+            console.print(
+                f"  [yellow]INSUFFICIENT DATA — need {MIN_OBS}+ observations "
+                f"(have {r.n_obs}). Run ingest to accumulate more price history.[/yellow]"
+            )
+            continue
+
+        t = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
+        t.add_column("Horizon", width=9)
+        t.add_column("IC (pooled)", justify="right", width=12)
+        t.add_column("H1", justify="right", width=10)
+        t.add_column("H2", justify="right", width=10)
+        t.add_column("Status", width=8)
+
+        for h in HORIZONS:
+            ic_full = r.ic.get(h, float("nan"))
+            ic_h1 = r.ic_h1.get(h, float("nan"))
+            ic_h2 = r.ic_h2.get(h, float("nan"))
+            both_pos = (not math.isnan(ic_h1) and ic_h1 > 0) and (not math.isnan(ic_h2) and ic_h2 > 0)
+            status = (
+                "[green]PASS[/green]"
+                if not math.isnan(ic_full) and ic_full > 0.05 and both_pos
+                else "[dim]—[/dim]"
+            )
+            t.add_row(f"{h}d", _fmt_ic(ic_full), _fmt_ic(ic_h1), _fmt_ic(ic_h2), status)
+
+        console.print(t)
+        pass_str = "[green]PASS ✓[/green]" if r.passes else "[red]FAIL[/red]"
+        console.print(f"  Signal verdict: {pass_str}\n")
+
+    console.print("═" * 70)
+    console.print(f"\n[bold]OVERALL THEME BASKET[/bold]")
+    t_combined = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
+    t_combined.add_column("Horizon", width=9)
+    t_combined.add_column("Combined IC", justify="right", width=12)
+    for h in HORIZONS:
+        t_combined.add_row(f"{h}d", _fmt_ic(result.combined_ic.get(h, float("nan"))))
+    console.print(t_combined)
+
+    valid_color = "green" if result.n_valid > 0 else "red"
+    console.print(
+        f"\n  Valid themes (IC > 0.05, both halves +): "
+        f"[{valid_color}]{result.n_valid}/{result.n_total}[/{valid_color}]"
+    )
+    console.print(
+        "\n[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
+        "Results overstate performance. Migrate to Polygon.io before trusting live numbers.[/dim]"
+    )
+
+
 def main() -> None:
     app()
 
