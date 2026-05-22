@@ -1,12 +1,14 @@
-"""Alternative signal backtest for a single ticker — three candidate signals.
+"""Alternative signal backtest for a single ticker — candidate signals.
 
 Signals:
-  1. est_rev   — earnings revision score (estimates.revision_score, range -1 to +1)
-  2. rvol      — today's volume / 20-day average volume
-  3. rs_vs_xlk — 20-day return of ticker minus 20-day return of XLK
+  1. rvol      — today's volume / 20-day average volume
+  2. rs_vs_xlk — 20-day return of ticker minus 20-day return of XLK
+  3. rs_vs_ign — 20-day return of ticker minus 20-day return of IGN
+
+Supports optional start_date to restrict observations to a post-pivot window.
 
 Forward returns sampled at 5d, 10d, 20d.
-PASS: IC > 0.05 at 10d or 20d, both halves positive, n >= 100.
+PASS: IC > 0.05 at 10d or 20d, both halves positive, n >= min_obs.
 """
 
 import logging
@@ -21,10 +23,9 @@ logger = logging.getLogger(__name__)
 
 HORIZONS = (5, 10, 20)
 LOOKBACK = 20
-MIN_OBS = 100
-BENCHMARK_ETF = "XLK"
+DEFAULT_MIN_OBS = 30
 
-SIGNALS = ("est_rev", "rvol", "rs_vs_xlk")
+SIGNALS = ("rvol", "rs_vs_xlk", "rs_vs_ign")
 
 
 @dataclass
@@ -40,14 +41,21 @@ class SignalResult:
 @dataclass
 class CatalystBacktestResult:
     ticker: str
+    start_date: str | None
     signal_results: list[SignalResult] = field(default_factory=list)
 
 
-def _trading_dates(ticker: str, conn) -> list[str]:
-    rows = conn.execute(
-        "SELECT DISTINCT date FROM prices WHERE ticker = ? ORDER BY date",
-        [ticker],
-    ).fetchall()
+def _trading_dates(ticker: str, conn, start_date: str | None = None) -> list[str]:
+    if start_date:
+        rows = conn.execute(
+            "SELECT DISTINCT date FROM prices WHERE ticker = ? AND date >= ? ORDER BY date",
+            [ticker, start_date],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT date FROM prices WHERE ticker = ? ORDER BY date",
+            [ticker],
+        ).fetchall()
     return [str(r[0]) for r in rows]
 
 
@@ -68,27 +76,12 @@ def _rolling_return(ticker: str, as_of: str, conn) -> float:
     return (float(latest) - float(oldest)) / float(oldest)
 
 
-def _signal_est_rev(ticker: str, as_of: str, conn) -> float:
-    """Latest revision_score on or before as_of."""
-    row = conn.execute(
-        "SELECT revision_score FROM estimates WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
-        [ticker, as_of],
-    ).fetchone()
-    if not row or row[0] is None:
-        return float("nan")
-    try:
-        v = float(row[0])
-        return v if not math.isnan(v) else float("nan")
-    except (TypeError, ValueError):
-        return float("nan")
-
-
 def _signal_rvol(ticker: str, as_of: str, conn) -> float:
     """Today's volume / 20-day average volume."""
     rows = conn.execute(
         """
-        SELECT volume, ROW_NUMBER() OVER (ORDER BY date DESC) AS rn
-        FROM prices WHERE ticker = ? AND date <= ?
+        SELECT volume FROM prices
+        WHERE ticker = ? AND date <= ?
         ORDER BY date DESC LIMIT 21
         """,
         [ticker, as_of],
@@ -104,10 +97,10 @@ def _signal_rvol(ticker: str, as_of: str, conn) -> float:
     return vols[0] / avg_20
 
 
-def _signal_rs_vs_xlk(ticker: str, as_of: str, conn) -> float:
-    """20-day return of ticker minus 20-day return of XLK."""
+def _signal_rs_vs(ticker: str, benchmark: str, as_of: str, conn) -> float:
+    """20-day return of ticker minus 20-day return of benchmark."""
     t_ret = _rolling_return(ticker, as_of, conn)
-    b_ret = _rolling_return(BENCHMARK_ETF, as_of, conn)
+    b_ret = _rolling_return(benchmark, as_of, conn)
     if math.isnan(t_ret) or math.isnan(b_ret):
         return float("nan")
     return t_ret - b_ret
@@ -138,9 +131,9 @@ def _ic(pairs: list[tuple[float, float]]) -> float:
     return float(val) if not math.isnan(val) else float("nan")
 
 
-def _eval_signal(signal_name: str, obs: list[dict]) -> SignalResult:
+def _eval_signal(signal_name: str, obs: list[dict], min_obs: int) -> SignalResult:
     result = SignalResult(name=signal_name, n_obs=len(obs))
-    if len(obs) < MIN_OBS:
+    if len(obs) < min_obs:
         return result
 
     mid = len(obs) // 2
@@ -169,20 +162,26 @@ def _eval_signal(signal_name: str, obs: list[dict]) -> SignalResult:
     return result
 
 
-def run_catalyst_backtest(ticker: str) -> CatalystBacktestResult:
-    """Run all three candidate signals for `ticker`."""
+def run_catalyst_backtest(
+    ticker: str,
+    start_date: str | None = None,
+    min_obs: int = DEFAULT_MIN_OBS,
+) -> CatalystBacktestResult:
+    """Run all candidate signals for `ticker`, optionally filtered to start_date onwards."""
     conn = get_connection()
     try:
-        dates = _trading_dates(ticker, conn)
-        signal_dates = dates[LOOKBACK: max(LOOKBACK, len(dates) - LOOKBACK)]
+        # Price dates within the post-pivot window (signals still look back LOOKBACK days
+        # before the window start to compute rolling returns — no lookahead violation).
+        dates = _trading_dates(ticker, conn, start_date=start_date)
+        # Drop the trailing LOOKBACK dates so every signal date has room for a 20d fwd return.
+        signal_dates = dates[: max(0, len(dates) - LOOKBACK)]
 
         signal_fns = {
-            "est_rev": _signal_est_rev,
-            "rvol": _signal_rvol,
-            "rs_vs_xlk": _signal_rs_vs_xlk,
+            "rvol": lambda t, dt, c: _signal_rvol(t, dt, c),
+            "rs_vs_xlk": lambda t, dt, c: _signal_rs_vs(t, "XLK", dt, c),
+            "rs_vs_ign": lambda t, dt, c: _signal_rs_vs(t, "IGN", dt, c),
         }
 
-        # Collect obs per signal independently (est_rev may have fewer dates)
         all_obs: dict[str, list[dict]] = {s: [] for s in SIGNALS}
 
         for dt in signal_dates:
@@ -195,10 +194,14 @@ def run_catalyst_backtest(ticker: str) -> CatalystBacktestResult:
                     all_obs[sig_name].append({"date": dt, "score": score, "fwds": fwds})
 
         signal_results = [
-            _eval_signal(sig_name, all_obs[sig_name]) for sig_name in SIGNALS
+            _eval_signal(sig_name, all_obs[sig_name], min_obs) for sig_name in SIGNALS
         ]
 
     finally:
         conn.close()
 
-    return CatalystBacktestResult(ticker=ticker, signal_results=signal_results)
+    return CatalystBacktestResult(
+        ticker=ticker,
+        start_date=start_date,
+        signal_results=signal_results,
+    )

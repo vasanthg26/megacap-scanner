@@ -2721,17 +2721,28 @@ def backtest_themes() -> None:
 @app.command("backtest-catalyst")
 def backtest_catalyst(
     ticker: str = typer.Option("NOK", "--ticker", "-t", help="Ticker to backtest"),
+    start_date: str | None = typer.Option(None, "--start-date", help="Filter to dates >= YYYY-MM-DD (post-pivot window)"),
 ) -> None:
-    """Alternative signal backtest for a single ticker (est_rev, rvol, rs_vs_xlk)."""
-    from scanner.backtest.catalyst_runner import MIN_OBS, HORIZONS, SIGNALS, run_catalyst_backtest
+    """Alternative signal backtest for a single ticker (rvol, rs_vs_xlk, rs_vs_ign)."""
+    from scanner.backtest.catalyst_runner import DEFAULT_MIN_OBS, HORIZONS, SIGNALS, run_catalyst_backtest
 
+    min_obs = DEFAULT_MIN_OBS
     console.print(f"[bold cyan]Running catalyst backtest for {ticker.upper()}...[/bold cyan]")
+    window_note = f"from {start_date} onwards" if start_date else "full history"
     console.print(
-        "[dim]Signals: earnings revision score | RVOL spike | RS vs XLK\n"
-        "Horizons: 5d, 10d, 20d  |  PASS: IC > 0.05 at 10d or 20d, both halves positive, n >= 100[/dim]\n"
+        f"[dim]Signals: RVOL spike | RS vs XLK | RS vs IGN\n"
+        f"Window: {window_note}  |  Horizons: 5d, 10d, 20d  |  PASS: IC > 0.05 at 10d or 20d, both halves positive, n >= {min_obs}[/dim]"
     )
 
-    result = run_catalyst_backtest(ticker.upper())
+    if start_date:
+        console.print(
+            "\n[yellow]Post-pivot sample only (from " + start_date + ")\n"
+            "Pre-pivot data excluded -- different business regime\n"
+            "Treat as early-stage signal with limited history[/yellow]"
+        )
+
+    console.print()
+    result = run_catalyst_backtest(ticker.upper(), start_date=start_date, min_obs=min_obs)
 
     def _fmt_ic(v: float) -> str:
         if math.isnan(v):
@@ -2740,9 +2751,9 @@ def backtest_catalyst(
         return f"[{color}]{v:+.3f}[/{color}]"
 
     signal_labels = {
-        "est_rev": "Earnings Revision Score",
         "rvol": "RVOL Spike (vol / 20d avg)",
         "rs_vs_xlk": "RS vs XLK (20d diff)",
+        "rs_vs_ign": "RS vs IGN (20d diff)",
     }
 
     console.print(f"[bold]Catalyst Backtest - {result.ticker}[/bold]")
@@ -2750,12 +2761,12 @@ def backtest_catalyst(
 
     for sr in result.signal_results:
         label = signal_labels.get(sr.name, sr.name)
-        n_color = "green" if sr.n_obs >= MIN_OBS else "red"
+        n_color = "green" if sr.n_obs >= min_obs else "red"
         console.print(f"\n[bold]{label}[/bold]  observations: [{n_color}]{sr.n_obs}[/{n_color}]")
 
-        if sr.n_obs < MIN_OBS:
+        if sr.n_obs < min_obs:
             console.print(
-                f"  [yellow]INSUFFICIENT DATA — need {MIN_OBS}+ observations "
+                f"  [yellow]INSUFFICIENT DATA -- need {min_obs}+ observations "
                 f"(have {sr.n_obs}). Accumulate more history before interpreting.[/yellow]"
             )
             continue
@@ -2775,12 +2786,12 @@ def backtest_catalyst(
             status = (
                 "[green]PASS[/green]"
                 if not math.isnan(ic_full) and ic_full > 0.05 and both_pos
-                else "[dim]—[/dim]"
+                else "[dim]--[/dim]"
             )
             t.add_row(f"{h}d", _fmt_ic(ic_full), _fmt_ic(ic_h1), _fmt_ic(ic_h2), status)
 
         console.print(t)
-        pass_str = "[green]PASS ✓[/green]" if sr.passes else "[red]FAIL[/red]"
+        pass_str = "[green]PASS[/green]" if sr.passes else "[red]FAIL[/red]"
         console.print(f"  Signal verdict: {pass_str}")
 
     console.print("\n" + "=" * 70)
