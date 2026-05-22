@@ -138,10 +138,15 @@ def _get_earnings_days(ticker: str, as_of: str, conn: duckdb.DuckDBPyConnection)
 
 
 def _get_est_rev(ticker: str, as_of: str, conn: duckdb.DuckDBPyConnection) -> float | None:
-    """Latest revision_score from estimates table as of as_of, or None."""
+    """Latest revision_score from estimates table, or None.
+
+    No date <= as_of bound: estimates are ingested as today's snapshot and may
+    be dated after the last price date (e.g. ingested today, prices close yesterday).
+    Theme scanner is a live viewer, not a backtest — always use most recent estimate.
+    """
     row = conn.execute(
-        "SELECT revision_score FROM estimates WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
-        [ticker, as_of],
+        "SELECT revision_score FROM estimates WHERE ticker = ? ORDER BY date DESC LIMIT 1",
+        [ticker],
     ).fetchone()
     if not row or row[0] is None:
         return None
