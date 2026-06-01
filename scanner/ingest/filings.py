@@ -1,8 +1,9 @@
-"""8-K filing ingest via SEC EDGAR REST API.
+"""8-K and S-3 filing ingest via Massive API.
 
-Fetches 8-K filings for all universe tickers, filters to material items only,
-runs auto-impact classification, and writes to the filings_8k DuckDB table.
-Idempotent: existing accession_numbers are skipped (UNIQUE constraint).
+Replaces the previous SEC EDGAR HTML scraping. The Massive API returns
+plain text directly in the response — no MarkItDown conversion needed.
+
+SEC_USER_AGENT is no longer required for filings (still needed for insiders).
 """
 
 import logging
@@ -19,10 +20,8 @@ from scanner.graph.loader import get_all_tickers
 
 logger = logging.getLogger(__name__)
 
-_RATE_SLEEP = 0.11  # SEC policy: <=10 req/s
-
-_EDGAR_BASE = "https://data.sec.gov"
-_CIK_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
+_RATE_SLEEP = 1.0  # conservative; adjust if plan allows higher throughput
+_MASSIVE_BASE = "https://api.massive.com"
 _SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "settings.yaml"
 
 # Items considered material enough to ingest
@@ -51,13 +50,21 @@ _DOWNGRADE_KEYWORDS = [
 
 _DOLLAR_PATTERN = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)\s*(billion|million|B|M)\b", re.IGNORECASE)
 
-_PLACEHOLDER_SUBSTRINGS = (
-    "your name", "your.email@example.com", "your_email@example.com",
-    "example@example.com", "name@example.com", "changeme", "placeholder",
-)
-
 _IMPACT_RANK = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
 _IMPACT_FROM_RANK = {2: "HIGH", 1: "MEDIUM", 0: "LOW"}
+
+
+def _get_massive_key() -> str | None:
+    key = os.environ.get("MASSIVE_API_KEY", "").strip()
+    if key:
+        return key
+    if _SETTINGS_PATH.exists():
+        with _SETTINGS_PATH.open() as f:
+            settings = yaml.safe_load(f) or {}
+        key = (settings.get("MASSIVE_API_KEY") or "").strip()
+        if key and key != "YOUR_MASSIVE_API_KEY_HERE":
+            return key
+    return None
 
 
 def _get_anthropic_key() -> str | None:
@@ -98,22 +105,6 @@ def _get_sonnet_client():
             return None
         _sonnet_client = anthropic.Anthropic(api_key=key, timeout=10.0)
     return _sonnet_client
-
-
-def _fetch_filing_text(url: str, session: requests.Session) -> str | None:
-    """Fetch filing HTML and return stripped plain text (first 3000 chars)."""
-    try:
-        resp = session.get(url, timeout=15)
-        time.sleep(_RATE_SLEEP)
-        resp.raise_for_status()
-        content = resp.text
-        if "<html" in content.lower() or "<body" in content.lower():
-            content = re.sub(r"<[^>]+>", " ", content)
-            content = re.sub(r"\s+", " ", content).strip()
-        return content[:3000] if content else None
-    except Exception as exc:
-        logger.warning("Failed to fetch filing text from %s: %s", url, exc)
-        return None
 
 
 def generate_filing_analysis(
@@ -250,44 +241,15 @@ def cleanup_filings(conn) -> dict:
     return {"low_removed": low_n, "medium_removed": med_n, "high_removed": high_n, "protected": protected_n}
 
 
-def _get_user_agent() -> str:
-    import os
-    value = os.environ.get("SEC_USER_AGENT", "")
-    if not value and _SETTINGS_PATH.exists():
-        with _SETTINGS_PATH.open() as f:
-            settings = yaml.safe_load(f) or {}
-        value = settings.get("SEC_USER_AGENT", "")
-    if not value or any(p in value.lower() for p in _PLACEHOLDER_SUBSTRINGS):
-        return "MegaCapScanner research@example.com"
-    return value
-
-
-def _make_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": _get_user_agent(), "Accept-Encoding": "gzip, deflate"})
-    return s
-
-
-def _load_cik_map(session: requests.Session) -> dict[str, str]:
-    """Return {ticker: zero-padded 10-digit CIK} for all SEC-registered companies."""
-    resp = session.get(_CIK_MAP_URL, timeout=30)
-    time.sleep(_RATE_SLEEP)
-    resp.raise_for_status()
-    raw = resp.json()
-    return {v["ticker"].upper(): str(v["cik_str"]).zfill(10) for v in raw.values()}
-
-
 def _classify_impact(item_numbers: str, title: str, description: str, form_type: str) -> str:
     """Auto-classify impact as HIGH, MEDIUM, or LOW."""
     text = f"{title or ''} {description or ''}".lower()
     items = [i.strip() for i in (item_numbers or "").split(",") if i.strip()]
 
-    # Amendment gets LOW baseline
     if form_type.upper().endswith("/A"):
         rank = _IMPACT_RANK["LOW"]
     elif any(i in _HIGH_ITEMS for i in items):
         rank = _IMPACT_RANK["HIGH"]
-        # 5.02 CEO/CFO → HIGH
         if "5.02" in items and any(kw in text for kw in ("ceo", "cfo", "chief executive", "chief financial")):
             rank = _IMPACT_RANK["HIGH"]
     elif any(i in _MEDIUM_ITEMS for i in items):
@@ -295,7 +257,6 @@ def _classify_impact(item_numbers: str, title: str, description: str, form_type:
     else:
         rank = _IMPACT_RANK["LOW"]
 
-    # Dollar detection — override rank floor
     for m in _DOLLAR_PATTERN.finditer(text):
         amount_str = m.group(1).replace(",", "")
         unit = m.group(2).lower()
@@ -309,7 +270,6 @@ def _classify_impact(item_numbers: str, title: str, description: str, form_type:
         elif amount_in_m >= 100:
             rank = max(rank, _IMPACT_RANK["MEDIUM"])
 
-    # Keyword boost / downgrade
     boost = any(kw.lower() in text for kw in _BOOST_KEYWORDS)
     downgrade = any(kw.lower() in text for kw in _DOWNGRADE_KEYWORDS)
     if boost and not downgrade:
@@ -320,101 +280,6 @@ def _classify_impact(item_numbers: str, title: str, description: str, form_type:
     return _IMPACT_FROM_RANK[rank]
 
 
-def _fetch_filings_for_ticker(
-    ticker: str,
-    cik: str,
-    session: requests.Session,
-    cutoff: date,
-) -> list[dict]:
-    """Fetch 8-K filings for a single ticker since `cutoff` date."""
-    url = f"{_EDGAR_BASE}/submissions/CIK{cik}.json"
-    try:
-        resp = session.get(url, timeout=30)
-        time.sleep(_RATE_SLEEP)
-        resp.raise_for_status()
-    except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            logger.warning("%s: CIK %s not found on EDGAR", ticker, cik)
-            return []
-        raise
-
-    data = resp.json()
-    recent = data.get("filings", {}).get("recent", {})
-    if not recent:
-        return []
-
-    forms = recent.get("form", [])
-    dates = recent.get("filingDate", [])
-    accessions = recent.get("accessionNumber", [])
-    primary_docs = recent.get("primaryDocument", [])
-    items_list = recent.get("items", [])
-    descriptions = recent.get("primaryDocDescription", [])
-
-    results = []
-    for i, (form, filed_str, accession, primary_doc) in enumerate(
-        zip(forms, dates, accessions, primary_docs)
-    ):
-        if form not in ("8-K", "8-K/A", "S-3", "S-3/A"):
-            continue
-        try:
-            filed = date.fromisoformat(filed_str)
-        except (ValueError, TypeError):
-            continue
-        if filed < cutoff:
-            continue
-
-        acc_clean = accession.replace("-", "")
-        filing_url = (
-            f"https://www.sec.gov/Archives/edgar/data/{int(cik)}"
-            f"/{acc_clean}/{primary_doc}"
-        )
-        title = descriptions[i] if i < len(descriptions) else None
-
-        if form in ("S-3", "S-3/A"):
-            results.append({
-                "ticker": ticker,
-                "filed_date": filed,
-                "accession_number": accession,
-                "form_type": form,
-                "item_numbers": "S-3: Shelf Registration",
-                "title": title,
-                "description": None,
-                "filing_url": filing_url,
-                "impact": "HIGH",
-                "impact_source": "auto",
-                "summary": (
-                    f"{ticker} filed Form S-3 shelf registration. "
-                    "This signals potential upcoming capital raise which may be dilutive to existing shareholders."
-                ),
-                "sentiment": "NEGATIVE",
-                "impact_explanation": None,
-            })
-            continue
-
-        items_raw = items_list[i] if i < len(items_list) else ""
-        material = _extract_material_items(items_raw)
-        if not material:
-            continue
-
-        item_numbers = ",".join(material)
-        impact = _classify_impact(item_numbers, title, None, form)
-
-        results.append({
-            "ticker": ticker,
-            "filed_date": filed,
-            "accession_number": accession,
-            "form_type": form,
-            "item_numbers": item_numbers,
-            "title": title,
-            "description": None,
-            "filing_url": filing_url,
-            "impact": impact,
-            "impact_source": "auto",
-        })
-
-    return results
-
-
 def _extract_material_items(items_raw) -> list[str]:
     """Given a raw 'items' value (str or list), return material item codes."""
     if not items_raw:
@@ -423,8 +288,101 @@ def _extract_material_items(items_raw) -> list[str]:
         candidates = [str(i).strip() for i in items_raw]
     else:
         candidates = [i.strip() for i in str(items_raw).split(",")]
-
     return [c for c in candidates if c in MATERIAL_ITEMS]
+
+
+def _fetch_filings_massive(ticker: str, cutoff: date, api_key: str) -> list[dict]:
+    """Fetch 8-K and S-3 filings for a single ticker via Massive API since `cutoff`."""
+    results = []
+
+    # 8-K filings — text included directly in response
+    try:
+        url = f"{_MASSIVE_BASE}/stocks/filings/8-K/v1/text"
+        resp = requests.get(
+            url,
+            params={"ticker": ticker, "limit": 10, "apiKey": api_key},
+            timeout=30,
+        )
+        time.sleep(_RATE_SLEEP)
+        resp.raise_for_status()
+        data = resp.json()
+        for item in data.get("results", []):
+            filed_str = (item.get("filed_at") or "")[:10]
+            try:
+                filed = date.fromisoformat(filed_str)
+            except (ValueError, TypeError):
+                continue
+            if filed < cutoff:
+                continue
+
+            items_raw = item.get("items", [])
+            material = _extract_material_items(items_raw)
+            if not material:
+                continue
+
+            item_numbers = ",".join(material)
+            filing_text = item.get("text") or ""
+            impact = _classify_impact(item_numbers, None, filing_text[:500], "8-K")
+
+            results.append({
+                "ticker": ticker,
+                "filed_date": filed,
+                "accession_number": item.get("accession_number", ""),
+                "form_type": "8-K",
+                "item_numbers": item_numbers,
+                "title": None,
+                "description": None,
+                "filing_url": None,
+                "impact": impact,
+                "impact_source": "auto",
+                "filing_text": filing_text or None,
+            })
+    except Exception as exc:
+        logger.warning("%s: Massive 8-K fetch failed: %s", ticker, exc)
+
+    # S-3 shelf registrations — fetched separately from the filings index
+    try:
+        url = f"{_MASSIVE_BASE}/stocks/filings/v1/index"
+        resp = requests.get(
+            url,
+            params={"ticker": ticker, "form_type": "S-3", "apiKey": api_key},
+            timeout=30,
+        )
+        time.sleep(_RATE_SLEEP)
+        resp.raise_for_status()
+        data = resp.json()
+        for item in data.get("results", []):
+            filed_str = (item.get("filed_at") or "")[:10]
+            try:
+                filed = date.fromisoformat(filed_str)
+            except (ValueError, TypeError):
+                continue
+            if filed < cutoff:
+                continue
+
+            results.append({
+                "ticker": ticker,
+                "filed_date": filed,
+                "accession_number": item.get("accession_number", ""),
+                "form_type": item.get("form_type", "S-3"),
+                "item_numbers": "S-3: Shelf Registration",
+                "title": None,
+                "description": None,
+                "filing_url": None,
+                "impact": "HIGH",
+                "impact_source": "auto",
+                "summary": (
+                    f"{ticker} filed Form S-3 shelf registration. "
+                    "This signals potential upcoming capital raise which may be dilutive to existing shareholders."
+                ),
+                "sentiment": "NEGATIVE",
+                "impact_explanation": None,
+                "filing_text": None,
+            })
+    except Exception as exc:
+        logger.warning("%s: Massive S-3 fetch failed: %s", ticker, exc)
+
+    return results
 
 
 def ingest_filings(
@@ -437,6 +395,11 @@ def ingest_filings(
     Returns status dict: ticker -> 'ok' | 'skipped' | 'error'.
     Idempotent: accession_number UNIQUE constraint prevents duplicates.
     """
+    api_key = _get_massive_key()
+    if not api_key:
+        logger.warning("MASSIVE_API_KEY not set — skipping filings ingest")
+        return {t: "skipped" for t in (tickers or get_all_tickers())}
+
     universe = tickers or get_all_tickers()
     cutoff = date.today() - timedelta(days=days_back)
     ingested_at = datetime.now(timezone.utc)
@@ -449,20 +412,10 @@ def ingest_filings(
     anthropic_key = _get_anthropic_key()
     summaries_enabled = anthropic_key is not None
 
-    session = _make_session()
     try:
-        logger.info("Loading CIK map from SEC EDGAR…")
-        cik_map = _load_cik_map(session)
-
         for ticker in universe:
-            cik = cik_map.get(ticker.upper())
-            if not cik:
-                logger.warning("%s: no CIK found, skipping", ticker)
-                results[ticker] = "skipped"
-                continue
-
             try:
-                filings = _fetch_filings_for_ticker(ticker, cik, session, cutoff)
+                filings = _fetch_filings_massive(ticker, cutoff, api_key)
                 written = 0
                 for f in filings:
                     existing = conn.execute(
@@ -470,7 +423,7 @@ def ingest_filings(
                         [f["accession_number"]],
                     ).fetchone()
                     if existing:
-                        continue  # already ingested — skip API call and insert
+                        continue
 
                     row = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM filings_8k").fetchone()
                     next_id = row[0]
@@ -478,13 +431,9 @@ def ingest_filings(
                     summary = f.get("summary")
                     sentiment = f.get("sentiment")
                     impact_explanation = f.get("impact_explanation")
+
                     if summaries_enabled and f["form_type"] not in ("S-3", "S-3/A"):
-                        filing_text = _fetch_filing_text(f["filing_url"], session)
-                        logger.debug(
-                            "Filing text length for %s: %d",
-                            ticker,
-                            len(filing_text) if filing_text else 0,
-                        )
+                        filing_text = f.get("filing_text")
                         if filing_text:
                             item_labels = ", ".join(
                                 MATERIAL_ITEMS.get(i.strip(), i.strip())
@@ -528,9 +477,10 @@ def ingest_filings(
                         written += 1
                     except Exception as exc:
                         if "UNIQUE constraint" in str(exc) or "unique" in str(exc).lower():
-                            pass  # already ingested
+                            pass
                         else:
                             logger.error("%s: insert error for %s: %s", ticker, f["accession_number"], exc)
+
                 logger.info("%-6s  %d filings written (since %s)", ticker, written, cutoff)
                 results[ticker] = "ok"
             except Exception as exc:
@@ -539,7 +489,6 @@ def ingest_filings(
 
         cleanup_filings(conn)
     finally:
-        session.close()
         if close_conn:
             conn.close()
 

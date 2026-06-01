@@ -200,6 +200,24 @@ CREATE TABLE IF NOT EXISTS theme_scan_results (
     action_label       VARCHAR,
     PRIMARY KEY (scan_date, ticker, theme_name)
 );
+
+CREATE TABLE IF NOT EXISTS short_interest (
+    ticker                  VARCHAR NOT NULL,
+    settlement_date         DATE    NOT NULL,
+    short_interest          BIGINT,
+    days_to_cover           DOUBLE,
+    short_percent_of_float  DOUBLE,
+    PRIMARY KEY (ticker, settlement_date)
+);
+
+CREATE TABLE IF NOT EXISTS news_sentiment (
+    ticker          VARCHAR NOT NULL,
+    published_date  DATE    NOT NULL,
+    title           TEXT    NOT NULL,
+    sentiment       VARCHAR,
+    article_url     TEXT,
+    PRIMARY KEY (ticker, published_date, title)
+);
 """
 
 

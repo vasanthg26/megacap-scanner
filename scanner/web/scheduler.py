@@ -13,6 +13,7 @@ scheduler_status: dict[str, Any] = {
     "last_insiders": None,
     "last_earnings": None,
     "last_filings": None,
+    "last_short_interest": None,
     "last_cleanup": None,
     "last_scan": None,
     "last_journal_capture": None,
@@ -22,6 +23,7 @@ scheduler_status: dict[str, Any] = {
     "last_insiders_ok": None,
     "last_earnings_ok": None,
     "last_filings_ok": None,
+    "last_short_interest_ok": None,
     "last_cleanup_ok": None,
     "last_scan_ok": None,
     "last_journal_capture_ok": None,
@@ -39,15 +41,16 @@ def set_scheduler(s) -> None:
 
 # Maps APScheduler job id → human label and scheduler_status keys.
 _JOB_META = {
-    "ingest_prices":    ("ingest",           "last_ingest",     "last_ingest_ok"),
-    "ingest_estimates": ("ingest-estimates",  "last_estimates",  "last_estimates_ok"),
-    "ingest_insiders":  ("ingest-insiders",   "last_insiders",   "last_insiders_ok"),
-    "ingest_earnings":  ("ingest-earnings",   "last_earnings",   "last_earnings_ok"),
-    "ingest_filings":   ("ingest-filings",    "last_filings",    "last_filings_ok"),
-    "cleanup_filings":  ("cleanup-filings",   "last_cleanup",    "last_cleanup_ok"),
-    "run_scan":         ("run-scan",          "last_scan",       "last_scan_ok"),
-    "journal_capture":  ("journal-capture",   "last_journal_capture", "last_journal_capture_ok"),
-    "scan_themes":      ("scan-themes",       "last_theme_scan",      "last_theme_scan_ok"),
+    "ingest_prices":        ("ingest",              "last_ingest",          "last_ingest_ok"),
+    "ingest_estimates":     ("ingest-estimates",     "last_estimates",       "last_estimates_ok"),
+    "ingest_insiders":      ("ingest-insiders",      "last_insiders",        "last_insiders_ok"),
+    "ingest_earnings":      ("ingest-earnings",      "last_earnings",        "last_earnings_ok"),
+    "ingest_filings":       ("ingest-filings",       "last_filings",         "last_filings_ok"),
+    "ingest_short":         ("ingest-short",         "last_short_interest",  "last_short_interest_ok"),
+    "cleanup_filings":      ("cleanup-filings",      "last_cleanup",         "last_cleanup_ok"),
+    "run_scan":             ("run-scan",             "last_scan",            "last_scan_ok"),
+    "journal_capture":      ("journal-capture",      "last_journal_capture", "last_journal_capture_ok"),
+    "scan_themes":          ("scan-themes",          "last_theme_scan",      "last_theme_scan_ok"),
 }
 
 
@@ -323,6 +326,27 @@ def _job_filings() -> None:
         _write_activity_log("ingest-filings", "error", str(exc)[:200])
 
 
+def _job_short_interest() -> None:
+    from scanner.ingest.short_interest import ingest_short_interest
+
+    logger.info("Scheduled job: short interest ingest starting")
+    try:
+        results = ingest_short_interest(None)
+        errors = [t for t, s in results.items() if s == "error"]
+        ok_si = len(errors) == 0
+        scheduler_status["last_short_interest_ok"] = ok_si
+        scheduler_status["last_short_interest"] = datetime.utcnow().isoformat()
+        if ok_si:
+            _write_activity_log("ingest-short", "success", f"{len(results)} tickers updated")
+        else:
+            _write_activity_log("ingest-short", "error", f"{len(errors)} tickers failed: {errors[:5]}")
+    except Exception as exc:
+        scheduler_status["last_short_interest"] = datetime.utcnow().isoformat()
+        scheduler_status["last_short_interest_ok"] = False
+        logger.error("Short interest ingest job failed: %s", exc)
+        _write_activity_log("ingest-short", "error", str(exc)[:200])
+
+
 def _job_journal_capture() -> None:
     from scanner.web.app import _capture_journal_sync
 
@@ -457,6 +481,15 @@ def create_scheduler():
         CronTrigger(hour=9, minute=20, timezone="America/New_York"),
         id="ingest_filings",
         name="Daily 8-K filings ingest",
+        replace_existing=True,
+    )
+
+    # Daily 9:22 AM ET — short interest ingest
+    scheduler.add_job(
+        _job_short_interest,
+        CronTrigger(hour=9, minute=22, timezone="America/New_York"),
+        id="ingest_short",
+        name="Daily short interest ingest",
         replace_existing=True,
     )
 

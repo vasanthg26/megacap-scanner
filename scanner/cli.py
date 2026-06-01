@@ -36,12 +36,22 @@ def ingest(
         Optional[list[str]],
         typer.Argument(help="Specific tickers to ingest (default: full universe)"),
     ] = None,
+    force_full: Annotated[
+        bool,
+        typer.Option(
+            "--force-full",
+            help="Force full 2-year backfill even if prices exist (use once after Massive API migration)",
+            is_flag=True,
+        ),
+    ] = False,
 ) -> None:
-    """Pull 3 years of daily OHLCV for the universe into DuckDB."""
+    """Pull OHLCV for the universe into DuckDB (Massive API or yfinance fallback)."""
     from scanner.ingest.prices import ingest_all
 
+    if force_full:
+        console.print("[bold yellow]--force-full: fetching full 2-year history for all tickers...[/bold yellow]")
     console.print("[bold cyan]Starting ingest...[/bold cyan]")
-    results = ingest_all(tickers or None)
+    results = ingest_all(tickers or None, force_full=force_full)
 
     ok = sum(1 for s in results.values() if s == "ok")
     empty = sum(1 for s in results.values() if s == "empty")
@@ -708,6 +718,40 @@ def ingest_filings_cmd(
         sys.exit(1)
 
 
+@app.command("ingest-short")
+def ingest_short_cmd(
+    tickers: Annotated[
+        Optional[list[str]],
+        typer.Argument(help="Specific tickers to ingest (default: full universe)"),
+    ] = None,
+) -> None:
+    """Fetch short interest data from Massive API into DuckDB."""
+    from scanner.ingest.short_interest import ingest_short_interest
+
+    label = ", ".join(tickers) if tickers else "full universe"
+    console.print(f"[bold cyan]Ingesting short interest for {label}...[/bold cyan]")
+
+    results = ingest_short_interest(tickers or None)
+
+    if not results:
+        console.print("[yellow]No data fetched — MASSIVE_API_KEY may not be set.[/yellow]")
+        return
+
+    ok = sum(1 for s in results.values() if s == "ok")
+    empty = sum(1 for s in results.values() if s == "empty")
+    errors = sum(1 for s in results.values() if s == "error")
+
+    table = Table(title="Short Interest Ingest Summary", box=box.SIMPLE)
+    table.add_column("Status", style="bold")
+    table.add_column("Count", justify="right")
+    table.add_row("[green]ok[/green]", str(ok))
+    table.add_row("[yellow]empty[/yellow]", str(empty))
+    table.add_row("[red]error[/red]", str(errors))
+    console.print(table)
+    if errors:
+        sys.exit(1)
+
+
 @app.command("insider-recent")
 def insider_recent(
     days: Annotated[int, typer.Option(help="Lookback window in calendar days")] = 30,
@@ -919,6 +963,30 @@ def scan(
     except Exception:
         pass
 
+    # Batch-load short interest — optional, silently skip if table is empty.
+    short_pct: dict[str, float | None] = {}
+    show_short = False
+    try:
+        si_count = conn.execute("SELECT COUNT(*) FROM short_interest").fetchone()[0]
+        if si_count > 0:
+            show_short = True
+            placeholders = ", ".join(["?" for _ in all_scan_tickers])
+            for tkr, sp in conn.execute(
+                f"""
+                SELECT ticker, short_percent_of_float
+                FROM (
+                    SELECT ticker, short_percent_of_float,
+                           ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY settlement_date DESC) AS rn
+                    FROM short_interest
+                    WHERE ticker IN ({placeholders})
+                ) t WHERE rn = 1
+                """,
+                all_scan_tickers,
+            ).fetchall():
+                short_pct[tkr] = sp
+    except Exception:
+        pass
+
     console.print(f"[dim]Fetching prices for {len(all_scan_tickers)} tickers...[/dim]")
     ticker_prices = _fetch_current_prices(all_scan_tickers)
 
@@ -967,6 +1035,8 @@ def scan(
         table.add_column("50MA", justify="right", width=6)
         table.add_column("Range", justify="right", width=8)
         table.add_column("Z", justify="right", width=8)
+        if show_short:
+            table.add_column("Short%", justify="right", width=8)
         if show_insiders:
             table.add_column("Insiders (30d)", width=14)
 
@@ -1036,6 +1106,13 @@ def scan(
             z = calc_basket_zscore(ticker, as_of, conn)
             z_str = f"[green]{z:+.2f}[/green]" if z is not None and z >= 0 else (f"[red]{z:+.2f}[/red]" if z is not None else "[dim]—[/dim]")
             base_cells.append(z_str)
+            if show_short:
+                sp = short_pct.get(ticker)
+                if sp is not None:
+                    short_cell = f"[orange1]{sp:.1f}%[/orange1]" if sp >= 10.0 else f"{sp:.1f}%"
+                else:
+                    short_cell = "[dim]—[/dim]"
+                base_cells.append(short_cell)
             if show_insiders:
                 base_cells.append(_fmt_insider(ins))
             table.add_row(*base_cells)

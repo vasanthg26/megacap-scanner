@@ -784,6 +784,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("ANTHROPIC_API_KEY: NOT SET")
 
+    massive_key = os.environ.get("MASSIVE_API_KEY")
+    if massive_key:
+        logger.info("MASSIVE_API_KEY: SET")
+    else:
+        logger.warning("MASSIVE_API_KEY: NOT SET — prices/filings will use yfinance/EDGAR fallbacks")
+
     scheduler = create_scheduler()
     set_scheduler(scheduler)
     scheduler.start()
@@ -969,6 +975,15 @@ async def api_run_cleanup_filings():
     if scheduler_status.get("last_cleanup_ok"):
         return {"status": "success"}
     return {"status": "failed", "error": "Filings cleanup failed — check server logs"}
+
+
+@app.post("/api/run/ingest-short")
+async def api_run_ingest_short():
+    from scanner.web.scheduler import _job_short_interest, scheduler_status
+    await asyncio.to_thread(_job_short_interest)
+    if scheduler_status.get("last_short_interest_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Short interest ingest completed with errors — check server logs"}
 
 
 @app.get("/api/admin/generate-summaries")

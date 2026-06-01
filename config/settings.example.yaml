@@ -1,5 +1,9 @@
-# SEC EDGAR requires HTTP requests to identify the accessing application.
-# Set SEC_USER_AGENT to your real application name and contact email.
+# Massive API key — required for prices, 8-K filings, short interest, and news.
+# Get your API key from massive.com
+# On Railway: set this as an environment variable instead.
+MASSIVE_API_KEY: YOUR_MASSIVE_API_KEY_HERE
+
+# SEC EDGAR user-agent — still required for Form 4 insider ingest.
 # Format: "AppName/Version (contact: real-email@domain.com)"
 SEC_USER_AGENT: "megacap-scanner/0.1 (contact: your-email@example.com)"
 
