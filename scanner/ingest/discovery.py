@@ -2,8 +2,10 @@
 
 Stages
 ======
-1. discover()        — weekly: query Massive related-companies for each known parent,
-                       apply quality gates, insert passing tickers as ACCUMULATING
+1. discover()        — weekly: read each known parent's 10-K to extract supplier /
+                       partner / customer mentions, match company names to tickers via
+                       COMPANY_TO_TICKER map, apply quality gates, insert passing
+                       tickers as ACCUMULATING, then immediately backfill RS history.
 2. accumulate_rs()   — daily: compute rolling RS score for each ACCUMULATING candidate,
                        advance to READY_FOR_BACKTEST at 60 days
 3. run_discovery_backtests() — triggered: IC backtest on rs_accumulation, auto-promote
@@ -11,8 +13,10 @@ Stages
 
 Discovery source
 ================
-Massive /v1/related-companies/{parent} — 10 calls (one per known parent).
-No Claude API, no 10-K analysis, no XNAS universe sweep.
+Parent 10-K (business + risk_factors sections via Massive) — 2 calls per parent,
+20 calls total. Company names extracted via SUPPLIER_PHRASES / CUSTOMER_PHRASES
+proximity matching; mapped to tickers via the COMPANY_TO_TICKER constant.
+UNMATCHED log lines surface new names to add to the map over time.
 
 Promotion criteria (same evidentiary bar as main signal):
   ic_h1 > 0.05 AND ic_h2 > 0.05 (both halves positive)
@@ -55,36 +59,98 @@ _DEPS_YAML_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "de
 
 _VALID_PARENTS = set(MEGA_CAPS)
 
-_PARENT_ALIASES: dict[str, list[str]] = {
-    "NVDA":  ["NVIDIA", "NVDA"],
-    "MSFT":  ["Microsoft", "MSFT"],
-    "META":  ["Meta", "Facebook", "META"],
-    "AAPL":  ["Apple", "AAPL"],
-    "AMZN":  ["Amazon", "AWS", "AMZN"],
-    "GOOGL": ["Google", "Alphabet", "GOOGL"],
-    "GOOG":  ["Google", "Alphabet", "GOOG"],
-    "TSLA":  ["Tesla", "TSLA"],
-    "AVGO":  ["Broadcom", "AVGO"],
-    "ORCL":  ["Oracle", "ORCL"],
-    "TSM":   ["TSMC", "Taiwan Semiconductor", "TSM"],
-}
-
-# Specific templates require {parent} substitution before matching.
-# Generic templates (no {parent}) are checked only when a parent alias is
-# also present in the text (word-boundary matched to avoid "meta" → "metadata").
-_CUSTOMER_PHRASE_TEMPLATES: list[str] = [
-    "{parent} accounted for",
-    "{parent} represented",
-    "sales to {parent}",
-    "revenue from {parent}",
-    "{parent} is our largest customer",
-    "{parent} is a significant customer",
-    "{parent} is our primary customer",
-    "our largest customer",
-    "significant customer",
-    "concentration of revenue",
-    "customer concentration",
+# Phrases that indicate a supplier / manufacturing / dependency relationship.
+# Searched in the parent's 10-K text within 150 chars of a known company name.
+SUPPLIER_PHRASES: list[str] = [
+    "manufactured by",
+    "supplied by",
+    "fabricated by",
+    "we rely on",
+    "we depend on",
+    "sole supplier",
+    "primary supplier",
+    "key supplier",
+    "contract manufacturer",
+    "outsourced to",
+    "produced by",
+    "assembled by",
+    "our suppliers",
+    "third-party suppliers",
+    "vendor",
+    "partner",
+    "we purchase from",
+    "we source from",
 ]
+
+# Phrases that indicate a customer / deployment relationship.
+CUSTOMER_PHRASES: list[str] = [
+    "our customers include",
+    "key customers",
+    "significant customers",
+    "largest customers",
+    "sold to",
+    "deployed by",
+    "used by",
+    "adopted by",
+]
+
+# Maps company name substrings (case-insensitive, word-boundary matched) to tickers.
+# None = not US-listed; still logged as UNMATCHED so we know what was mentioned.
+# Extend this map as UNMATCHED log lines surface new names.
+COMPANY_TO_TICKER: dict[str, Optional[str]] = {
+    # Semiconductor / Hardware
+    "Taiwan Semiconductor": "TSM",
+    "TSMC": "TSM",
+    "Samsung": None,
+    "SK Hynix": None,
+    "Micron": "MU",
+    "Western Digital": "WDC",
+    "Seagate": "STX",
+    "Marvell": "MRVL",
+    "Mellanox": None,          # acquired by NVDA
+    "Arista": "ANET",
+    "Coherent": "COHR",
+    "Lumentum": "LITE",
+    "Viavi": "VIAV",
+    "Super Micro": "SMCI",
+    "Supermicro": "SMCI",
+    "Dell": "DELL",
+    "Hewlett Packard Enterprise": "HPE",
+    "HPE": "HPE",
+    "Vertiv": "VRT",
+    "Eaton": "ETN",
+    "Credo": "CRDO",
+    "Astera Labs": "ALAB",
+    "Celestica": "CLS",
+    "Flex": "FLEX",
+    "Jabil": "JBL",
+    # Cloud / Software
+    "Salesforce": "CRM",
+    "ServiceNow": "NOW",
+    "Workday": "WDAY",
+    "Snowflake": "SNOW",
+    "Datadog": "DDOG",
+    "Cloudflare": "NET",
+    "Okta": "OKTA",
+    "Palantir": "PLTR",
+    # EV / Auto suppliers
+    "Aptiv": "APTV",
+    "Magna": "MGA",
+    "Onsemi": "ON",
+    "ON Semiconductor": "ON",
+    "STMicroelectronics": "STM",
+    "Albemarle": "ALB",
+    "Rivian": "RIVN",
+    "Lucid": "LCID",
+    # Power / Infrastructure
+    "Hubbell": "HUBB",
+    "Quanta Services": "PWR",
+    "Comfort Systems": "FIX",
+    "GE Vernova": "GEV",
+    "Constellation Energy": "CEG",
+    "Vistra": "VST",
+    "NRG Energy": "NRG",
+}
 
 
 # ---------- config helpers -------------------------------------------------------
@@ -103,38 +169,20 @@ def _get_massive_key() -> Optional[str]:
     return None
 
 
-# ---------- discovery source — related-companies ---------------------------------
+# ---------- discovery source — parent 10-K extraction ---------------------------
 
-def _fetch_related_companies(parent: str, api_key: str) -> list[str]:
-    """Return related ticker symbols for parent from Massive related-companies endpoint."""
-    url = f"{_MASSIVE_BASE}/v1/related-companies/{parent}?apiKey={api_key}"
-    try:
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("status") != "OK":
-            logger.warning("%s: related-companies returned status %s", parent, data.get("status"))
-            return []
-        return [r["ticker"] for r in data.get("results", []) if r.get("ticker")]
-    except Exception as exc:
-        logger.error("%s: related-companies fetch failed: %s", parent, exc)
-        return []
-
-
-# ---------- 10-K customer concentration gate ------------------------------------
-
-def _fetch_10k_text(ticker: str, api_key: str) -> str:
-    """Fetch business + risk_factors sections from the most recent 10-K via Massive.
+def _fetch_parent_10k_text(parent: str, api_key: str) -> str:
+    """Fetch business + risk_factors sections from the parent's most recent 10-K.
 
     Returns combined text, or empty string when no filing is available.
-    Response shape: {"results": [{"text": "...", ...}]}.  Field confirmed via probe.
+    Response shape confirmed via probe: {"results": [{"text": "...", ...}]}.
     """
     combined: list[str] = []
     for section in ("business", "risk_factors"):
         try:
             resp = requests.get(
                 f"{_MASSIVE_BASE}/stocks/filings/10-K/vX/sections",
-                params={"ticker": ticker, "section": section, "apiKey": api_key},
+                params={"ticker": parent, "section": section, "apiKey": api_key},
                 timeout=30,
             )
             resp.raise_for_status()
@@ -145,49 +193,44 @@ def _fetch_10k_text(ticker: str, api_key: str) -> str:
                 if text:
                     combined.append(text)
         except Exception as exc:
-            logger.warning("%s: 10-K section '%s' fetch failed: %s", ticker, section, exc)
+            logger.warning("%s: 10-K section '%s' fetch failed: %s", parent, section, exc)
             time.sleep(_MASSIVE_RATE_SLEEP)
     return "\n\n".join(combined)
 
 
-def _check_customer_concentration(ticker: str, parent: str, text: str) -> bool:
-    """Return True if the 10-K text confirms a dependency on parent.
+def _extract_tickers_from_10k(text: str, parent: str) -> list[str]:
+    """Return tickers of companies mentioned near supplier/customer phrases in text.
 
-    A hit requires:
-    - A specific phrase (with parent alias substituted) found as substring, OR
-    - A generic phrase found AND a parent alias is present (word-boundary matched
-      to prevent "meta" matching "metadata", "aws" matching "laws", etc.).
+    For each company name in COMPANY_TO_TICKER, searches for its occurrence
+    (word-boundary, case-insensitive) in the 10-K text. On a hit, checks whether
+    any SUPPLIER_PHRASES or CUSTOMER_PHRASES appear within 150 characters.
+
+    - Ticker not None → add to results
+    - Ticker is None → log UNMATCHED (not US-listed; tells us what to add to map)
+    - Company name not in map → silently missed (add name to map when found in logs)
+
+    Returns deduplicated list of tickers.
     """
     if not text:
-        return False
+        return []
+
     text_lower = text.lower()
-    aliases = _PARENT_ALIASES.get(parent, [parent])
+    all_phrases = SUPPLIER_PHRASES + CUSTOMER_PHRASES
+    found: set[str] = set()
 
-    specific = [t for t in _CUSTOMER_PHRASE_TEMPLATES if "{parent}" in t]
-    generic = [t for t in _CUSTOMER_PHRASE_TEMPLATES if "{parent}" not in t]
+    for company_name, ticker in COMPANY_TO_TICKER.items():
+        pattern = r"\b" + re.escape(company_name.lower()) + r"\b"
+        for match in re.finditer(pattern, text_lower):
+            s, e = match.start(), match.end()
+            window = text_lower[max(0, s - 150): min(len(text_lower), e + 150)]
+            if any(phrase.lower() in window for phrase in all_phrases):
+                if ticker is None:
+                    logger.info("  UNMATCHED: '%s' — not in ticker map", company_name)
+                else:
+                    found.add(ticker)
+                break  # one confirmed mention per company name is enough
 
-    for alias in aliases:
-        for template in specific:
-            phrase = template.replace("{parent}", alias).lower()
-            if phrase in text_lower:
-                logger.info("  %s → %s: 10-K match '%s'", ticker, parent, phrase)
-                return True
-
-    # Generic phrases are only meaningful when the parent alias is also present.
-    alias_present = any(
-        re.search(r"\b" + re.escape(alias.lower()) + r"\b", text_lower)
-        for alias in aliases
-    )
-    if alias_present:
-        for phrase in generic:
-            if phrase.lower() in text_lower:
-                logger.info(
-                    "  %s → %s: 10-K match generic='%s' (alias present)",
-                    ticker, parent, phrase,
-                )
-                return True
-
-    return False
+    return list(found)
 
 
 # ---------- quality gates --------------------------------------------------------
@@ -350,14 +393,13 @@ def _check_quality_gates(
 # ---------- discover() main ------------------------------------------------------
 
 def discover(conn=None) -> int:
-    """Query Massive related-companies for each known parent, apply 3 gates,
-    insert passing candidates as ACCUMULATING, then immediately backfill RS
-    history for new candidates. Returns count of new insertions.
+    """Read each known parent's 10-K, extract supplier/partner mentions, match to
+    tickers, apply quality gates, insert passing candidates as ACCUMULATING, then
+    immediately backfill RS history. Returns count of new insertions.
 
-    Gates applied in order:
-      1. Not a known parent (MEGA_CAPS list)
-      2. Quality: price >= $5, ADV >= $10M, listed >= 180 days
-      3. 10-K customer concentration: parent alias appears alongside customer phrases
+    Gates applied per candidate ticker:
+      1. Not a known parent (MEGA_CAPS)
+      2. Quality: price >= $5, ADV >= $10M, listed >= 180 days, not in graph/discovery
     """
     _own_conn = conn is None
     if _own_conn:
@@ -369,7 +411,7 @@ def discover(conn=None) -> int:
             logger.error("MASSIVE_API_KEY not set — discovery cannot run")
             return 0
 
-        logger.info("Discovery: querying related companies for %d parents...", len(MEGA_CAPS))
+        logger.info("Discovery: reading 10-K for %d parents...", len(MEGA_CAPS))
 
         in_graph = _already_in_graph()
         active_in_discovery, recently_failed = _build_exclude_sets(conn)
@@ -378,35 +420,27 @@ def discover(conn=None) -> int:
         newly_inserted: list[tuple[str, str]] = []
 
         for parent in MEGA_CAPS:
-            related = _fetch_related_companies(parent, api_key)
-            logger.info("%s related: %d candidates returned", parent, len(related))
-            time.sleep(_MASSIVE_RATE_SLEEP)
+            text = _fetch_parent_10k_text(parent, api_key)
+            if not text:
+                logger.warning("%s: no 10-K sections available — skipping", parent)
+                continue
+            logger.info("%s 10-K: business + risk_factors fetched (%d chars)", parent, len(text))
 
-            for ticker in related:
-                # Gate 1: skip known parents (eliminates GOOG, AMD, INTC etc.)
+            candidate_tickers = _extract_tickers_from_10k(text, parent)
+
+            for ticker in candidate_tickers:
+                # Gate 1: skip known parents
                 if ticker in _VALID_PARENTS:
                     logger.info("  SKIP: %s — is a known parent", ticker)
                     continue
 
-                # Gate 2: quality (price, ADV, listing age)
+                # Gate 2: quality (price, ADV, listing age, graph/discovery membership)
                 passes, reason = _check_quality_gates(
                     ticker, conn, api_key,
                     in_graph, active_in_discovery, recently_failed,
                 )
                 if not passes:
                     logger.info("  SKIP: %s — %s", ticker, reason)
-                    continue
-
-                # Gate 3: 10-K customer concentration confirms parent dependency
-                text = _fetch_10k_text(ticker, api_key)
-                if not text:
-                    logger.info("  SKIP: %s — no 10-K sections available from Massive", ticker)
-                    continue
-                if not _check_customer_concentration(ticker, parent, text):
-                    logger.info(
-                        "  SKIP: %s — no customer dependency found in 10-K for parent %s",
-                        ticker, parent,
-                    )
                     continue
 
                 try:
@@ -417,21 +451,19 @@ def discover(conn=None) -> int:
                              revenue_pct, evidence, source_accession,
                              discovered_date, status)
                         VALUES (?, ?, NULL, NULL, NULL, NULL,
-                                'massive_related_companies', CURRENT_DATE, 'ACCUMULATING')
+                                ?, CURRENT_DATE, 'ACCUMULATING')
                         """,
-                        [ticker, parent],
+                        [ticker, parent, f"parent_10k_{parent}"],
                     )
                     active_in_discovery.add(ticker)
                     newly_inserted.append((ticker, parent))
                     inserted += 1
-                    logger.info("  NEW: %s → %s (10-K confirmed)", ticker, parent)
+                    logger.info("  NEW: %s → %s (via %s 10-K)", ticker, parent, parent)
                 except Exception as exc:
                     logger.error("  %s → %s: insert failed: %s", ticker, parent, exc)
 
         logger.info("Discovery complete: %d new candidates inserted", inserted)
 
-        # Immediately backfill RS history for new candidates so backtests can
-        # run right after discover() without waiting for the next accumulate-rs job.
         if newly_inserted:
             logger.info("Backfilling RS for %d new candidates...", len(newly_inserted))
             _backfill_rs_pairs(newly_inserted, conn)

@@ -236,22 +236,18 @@ or interact with the regime gate. It is a warning only.
 - `discovery_candidates` is append-only for audit trail (never DELETE rows; use status transitions)
 - Promotion requires `ic_h1 > 0.05` AND `ic_h2 > 0.05` — both halves positive (same bar as RS signal)
 - Failed tickers re-eligible for re-discovery after 90 days only
-- **Discovery source**: Massive `/v1/related-companies/{parent}` — 10 calls per run (one per MEGA_CAPS parent), no Claude API
-  - Returns max 10 tickers per parent; endpoint returns only `{"ticker": "..."}` — no dependency metadata
+- **Discovery source**: Parent 10-K sections via Massive — 2 calls per parent (business + risk_factors), 20 calls total per run, no Claude API
   - `dependency_strength` and `claude_confidence` are always NULL for auto-discovered candidates
-  - `source_accession` = `'massive_related_companies'` for traceability
-- **3 gates applied in order before insertion**:
-  - Gate 1 — Not a known parent: skip any ticker in MEGA_CAPS (eliminates AMD, INTC, GOOG returned by related-companies)
+  - `source_accession` = `'parent_10k_{parent}'` (e.g. `'parent_10k_NVDA'`) for traceability
+  - `COMPANY_TO_TICKER` map in `discovery.py` is the core of extraction — extend it as UNMATCHED logs surface new names
+  - `None` ticker entries in the map are intentional: surfaces non-US-listed names (Samsung, SK Hynix) as UNMATCHED logs
+  - Probe confirmed (2026-06-01): NVDA 10-K → HPE, LITE, MRVL extracted; Samsung UNMATCHED
+- **2 gates applied in order before insertion**:
+  - Gate 1 — Not a known parent: skip any ticker in MEGA_CAPS
   - Gate 2 — Quality: price ≥ $5, ADV ≥ $10M, listed ≥ 180 days, not already in graph or discovery
     - Price/ADV checked from `prices` table first; falls back to Massive aggs if ticker not in DB
     - Listing age checked from oldest price date in DB; falls back to Massive ticker detail endpoint
-  - Gate 3 — 10-K customer concentration: fetch `business` + `risk_factors` sections from Massive
-    (`/stocks/filings/10-K/vX/sections`); confirm parent alias appears alongside customer phrases
-    - Specific phrase match: `"{parent} accounted for"`, `"sales to {parent}"` etc. with each alias
-    - Generic phrase match (`"significant customer"`, `"customer concentration"` etc.) requires parent
-      alias also present with word-boundary matching (prevents "meta"→"metadata" false positives)
-    - No 10-K available → skip; no phrase match → skip
-    - If 10-K gate passes, RS backfill is run immediately for the new candidate
+  - RS backfill runs immediately for newly inserted candidates
 - **Layer 2 (future)**: 8-K contract announcements — `"entered into agreement with {parent}"` / `"supply agreement with {parent}"` — implement when 10-K coverage is insufficient
 - Scheduler: weekly discovery Sunday 6 AM ET; daily RS accumulation 9:45 AM ET
 - `_load_edges` is `@lru_cache` — `_append_to_dependencies_yaml` calls `_load_edges.cache_clear()` after write; restart process to pick up new edges in live server
