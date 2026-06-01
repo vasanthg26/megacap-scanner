@@ -107,9 +107,10 @@ COMPANY_TO_TICKER: dict[str, Optional[str]] = {
     "Western Digital": "WDC",
     "Seagate": "STX",
     "Marvell": "MRVL",
-    "Mellanox": None,          # acquired by NVDA
+    "Globalfoundries": "GFS",
     "Arista": "ANET",
     "Coherent": "COHR",
+    "II-VI": "COHR",           # historical name; merged into Coherent
     "Lumentum": "LITE",
     "Viavi": "VIAV",
     "Super Micro": "SMCI",
@@ -124,6 +125,11 @@ COMPANY_TO_TICKER: dict[str, Optional[str]] = {
     "Celestica": "CLS",
     "Flex": "FLEX",
     "Jabil": "JBL",
+    "Kulicke": "KLIC",
+    "Amkor": "AMKR",
+    "Onto Innovation": "ONTO",
+    "Azenta": "AZTA",
+    "Wolfspeed": "WOLF",
     # Cloud / Software
     "Salesforce": "CRM",
     "ServiceNow": "NOW",
@@ -140,6 +146,8 @@ COMPANY_TO_TICKER: dict[str, Optional[str]] = {
     "ON Semiconductor": "ON",
     "STMicroelectronics": "STM",
     "Albemarle": "ALB",
+    "Arcadium Lithium": "ALTM",
+    "SQM": "SQM",              # foreign issuer (Chile); ADR on NYSE
     "Rivian": "RIVN",
     "Lucid": "LCID",
     # Power / Infrastructure
@@ -176,6 +184,8 @@ def _fetch_parent_10k_text(parent: str, api_key: str) -> str:
 
     Returns combined text, or empty string when no filing is available.
     Response shape confirmed via probe: {"results": [{"text": "...", ...}]}.
+    Falls back to the second-most-recent filing if the latest section is too short
+    (handles 10-K/A amendments that may have sparse section text).
     """
     combined: list[str] = []
     for section in ("business", "risk_factors"):
@@ -188,49 +198,92 @@ def _fetch_parent_10k_text(parent: str, api_key: str) -> str:
             resp.raise_for_status()
             time.sleep(_MASSIVE_RATE_SLEEP)
             results = resp.json().get("results", [])
-            if results:
-                text = results[0].get("text", "")
-                if text:
-                    combined.append(text)
+            text = ""
+            for result in results[:2]:  # try most recent, then previous filing
+                candidate = result.get("text", "")
+                if len(candidate) >= 100:
+                    text = candidate
+                    break
+            if not text:
+                logger.warning(
+                    "%s: 10-K section '%s': empty or too short — skipping", parent, section
+                )
+                continue
+            combined.append(text)
         except Exception as exc:
-            logger.warning("%s: 10-K section '%s' fetch failed: %s", parent, section, exc)
+            logger.warning(
+                "%s: 10-K section '%s' fetch failed: %s — skipping", parent, section, exc
+            )
             time.sleep(_MASSIVE_RATE_SLEEP)
     return "\n\n".join(combined)
 
 
 def _extract_tickers_from_10k(text: str, parent: str) -> list[str]:
-    """Return tickers of companies mentioned near supplier/customer phrases in text.
+    """Return tickers of companies co-mentioned with supplier/customer phrases.
 
-    For each company name in COMPANY_TO_TICKER, searches for its occurrence
-    (word-boundary, case-insensitive) in the 10-K text. On a hit, checks whether
-    any SUPPLIER_PHRASES or CUSTOMER_PHRASES appear within 150 characters.
+    Splits text into sentences. For each sentence that contains at least one
+    SUPPLIER_PHRASES or CUSTOMER_PHRASES hit, scans all COMPANY_TO_TICKER keys.
+    A company name found in the same sentence as a relevant phrase → confirmed.
 
     - Ticker not None → add to results
-    - Ticker is None → log UNMATCHED (not US-listed; tells us what to add to map)
-    - Company name not in map → silently missed (add name to map when found in logs)
+    - Ticker is None → log UNMATCHED once per name (surfaces names to add to map)
 
     Returns deduplicated list of tickers.
     """
     if not text:
         return []
 
-    text_lower = text.lower()
+    sentences = re.split(r"(?<=[.!?])\s+", text)
     all_phrases = SUPPLIER_PHRASES + CUSTOMER_PHRASES
     found: set[str] = set()
+    logged_unmatched: set[str] = set()
 
-    for company_name, ticker in COMPANY_TO_TICKER.items():
-        pattern = r"\b" + re.escape(company_name.lower()) + r"\b"
-        for match in re.finditer(pattern, text_lower):
-            s, e = match.start(), match.end()
-            window = text_lower[max(0, s - 150): min(len(text_lower), e + 150)]
-            if any(phrase.lower() in window for phrase in all_phrases):
+    for sentence in sentences:
+        sentence_lower = sentence.lower()
+        if not any(phrase in sentence_lower for phrase in all_phrases):
+            continue
+        for company_name, ticker in COMPANY_TO_TICKER.items():
+            if company_name.lower() in sentence_lower:
                 if ticker is None:
-                    logger.info("  UNMATCHED: '%s' — not in ticker map", company_name)
+                    if company_name not in logged_unmatched:
+                        logger.info("  UNMATCHED: '%s' — not in ticker map", company_name)
+                        logged_unmatched.add(company_name)
                 else:
                     found.add(ticker)
-                break  # one confirmed mention per company name is enough
 
     return list(found)
+
+
+# ---------- dependency_graph sync -----------------------------------------------
+
+def sync_dependency_graph(conn) -> None:
+    """Upsert all static edges from dependencies.yaml into dependency_graph table.
+
+    Called at the start of discover() so the table is always current before any
+    discovery logic runs. Uses INSERT OR IGNORE so existing promoted entries
+    (source='discovery_promoted') are not overwritten.
+    """
+    try:
+        with open(_DEPS_YAML_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        edges = data.get("edges", [])
+        rows = [
+            (e["child"], e["parent"], "static_yaml", date.today().isoformat(),
+             None, None, None, "ACTIVE")
+            for e in edges
+            if e.get("child") and e.get("parent")
+        ]
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO dependency_graph
+                (ticker, parent, source, validated_date, ic_h1, ic_h2, ic_full, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        logger.info("dependency_graph: synced %d static edges from dependencies.yaml", len(rows))
+    except Exception as exc:
+        logger.error("dependency_graph sync failed: %s", exc)
 
 
 # ---------- quality gates --------------------------------------------------------
@@ -413,6 +466,7 @@ def discover(conn=None) -> int:
 
         logger.info("Discovery: reading 10-K for %d parents...", len(MEGA_CAPS))
 
+        sync_dependency_graph(conn)
         in_graph = _already_in_graph()
         active_in_discovery, recently_failed = _build_exclude_sets(conn)
 
@@ -783,6 +837,16 @@ def run_discovery_backtests(conn=None) -> int:
                         [ticker, parent],
                     )
                     _append_to_dependencies_yaml(ticker, parent, evidence or "")
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO dependency_graph
+                            (ticker, parent, source, validated_date,
+                             ic_h1, ic_h2, ic_full, status)
+                        VALUES (?, ?, 'discovery_promoted', ?, ?, ?, ?, 'ACTIVE')
+                        """,
+                        [ticker, parent, today,
+                         metrics["ic_h1"], metrics["ic_h2"], metrics["ic_full"]],
+                    )
                     logger.info(
                         "PROMOTED: %s → %s  IC H1:%.3f H2:%.3f",
                         ticker, parent, metrics["ic_h1"], metrics["ic_h2"],

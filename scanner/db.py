@@ -258,6 +258,18 @@ CREATE TABLE IF NOT EXISTS discovery_backtest_results (
     notes    TEXT,
     PRIMARY KEY (ticker, parent, run_date)
 );
+
+CREATE TABLE IF NOT EXISTS dependency_graph (
+    ticker          VARCHAR NOT NULL,
+    parent          VARCHAR NOT NULL,
+    source          VARCHAR,          -- 'static_yaml' | 'discovery_promoted'
+    validated_date  DATE,
+    ic_h1           DOUBLE,
+    ic_h2           DOUBLE,
+    ic_full         DOUBLE,
+    status          VARCHAR DEFAULT 'ACTIVE',
+    PRIMARY KEY (ticker, parent)
+);
 """
 
 
