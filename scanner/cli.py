@@ -3324,21 +3324,11 @@ def discover(
         typer.Option("--dry-run", help="Show candidate count without inserting", is_flag=True),
     ] = False,
 ) -> None:
-    """Fetch XNAS universe, analyze 10-K filings via Claude Haiku, insert new ACCUMULATING candidates."""
-    from scanner.ingest.discovery import discover as _discover, _get_universe_candidates, _get_massive_key
-    from scanner.db import get_connection
+    """Fetch related companies from Massive API for each known parent and insert new ACCUMULATING candidates."""
+    from scanner.ingest.discovery import discover as _discover
 
     if dry_run:
-        key = _get_massive_key()
-        if not key:
-            console.print("[red]MASSIVE_API_KEY not set[/red]")
-            raise typer.Exit(1)
-        conn = get_connection()
-        try:
-            candidates = _get_universe_candidates(key, conn)
-            console.print(f"[cyan]{len(candidates)} candidates eligible for discovery analysis[/cyan]")
-        finally:
-            conn.close()
+        console.print("[yellow]--dry-run not supported with related-companies source — run without flag to insert[/yellow]")
         return
 
     console.print("[bold cyan]Running discovery pipeline...[/bold cyan]")
