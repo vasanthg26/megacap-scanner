@@ -23,6 +23,7 @@ to pick up new edges.
 
 import logging
 import math
+import re
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -53,6 +54,37 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "set
 _DEPS_YAML_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "dependencies.yaml"
 
 _VALID_PARENTS = set(MEGA_CAPS)
+
+_PARENT_ALIASES: dict[str, list[str]] = {
+    "NVDA":  ["NVIDIA", "NVDA"],
+    "MSFT":  ["Microsoft", "MSFT"],
+    "META":  ["Meta", "Facebook", "META"],
+    "AAPL":  ["Apple", "AAPL"],
+    "AMZN":  ["Amazon", "AWS", "AMZN"],
+    "GOOGL": ["Google", "Alphabet", "GOOGL"],
+    "GOOG":  ["Google", "Alphabet", "GOOG"],
+    "TSLA":  ["Tesla", "TSLA"],
+    "AVGO":  ["Broadcom", "AVGO"],
+    "ORCL":  ["Oracle", "ORCL"],
+    "TSM":   ["TSMC", "Taiwan Semiconductor", "TSM"],
+}
+
+# Specific templates require {parent} substitution before matching.
+# Generic templates (no {parent}) are checked only when a parent alias is
+# also present in the text (word-boundary matched to avoid "meta" → "metadata").
+_CUSTOMER_PHRASE_TEMPLATES: list[str] = [
+    "{parent} accounted for",
+    "{parent} represented",
+    "sales to {parent}",
+    "revenue from {parent}",
+    "{parent} is our largest customer",
+    "{parent} is a significant customer",
+    "{parent} is our primary customer",
+    "our largest customer",
+    "significant customer",
+    "concentration of revenue",
+    "customer concentration",
+]
 
 
 # ---------- config helpers -------------------------------------------------------
@@ -87,6 +119,75 @@ def _fetch_related_companies(parent: str, api_key: str) -> list[str]:
     except Exception as exc:
         logger.error("%s: related-companies fetch failed: %s", parent, exc)
         return []
+
+
+# ---------- 10-K customer concentration gate ------------------------------------
+
+def _fetch_10k_text(ticker: str, api_key: str) -> str:
+    """Fetch business + risk_factors sections from the most recent 10-K via Massive.
+
+    Returns combined text, or empty string when no filing is available.
+    Response shape: {"results": [{"text": "...", ...}]}.  Field confirmed via probe.
+    """
+    combined: list[str] = []
+    for section in ("business", "risk_factors"):
+        try:
+            resp = requests.get(
+                f"{_MASSIVE_BASE}/stocks/filings/10-K/vX/sections",
+                params={"ticker": ticker, "section": section, "apiKey": api_key},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            time.sleep(_MASSIVE_RATE_SLEEP)
+            results = resp.json().get("results", [])
+            if results:
+                text = results[0].get("text", "")
+                if text:
+                    combined.append(text)
+        except Exception as exc:
+            logger.warning("%s: 10-K section '%s' fetch failed: %s", ticker, section, exc)
+            time.sleep(_MASSIVE_RATE_SLEEP)
+    return "\n\n".join(combined)
+
+
+def _check_customer_concentration(ticker: str, parent: str, text: str) -> bool:
+    """Return True if the 10-K text confirms a dependency on parent.
+
+    A hit requires:
+    - A specific phrase (with parent alias substituted) found as substring, OR
+    - A generic phrase found AND a parent alias is present (word-boundary matched
+      to prevent "meta" matching "metadata", "aws" matching "laws", etc.).
+    """
+    if not text:
+        return False
+    text_lower = text.lower()
+    aliases = _PARENT_ALIASES.get(parent, [parent])
+
+    specific = [t for t in _CUSTOMER_PHRASE_TEMPLATES if "{parent}" in t]
+    generic = [t for t in _CUSTOMER_PHRASE_TEMPLATES if "{parent}" not in t]
+
+    for alias in aliases:
+        for template in specific:
+            phrase = template.replace("{parent}", alias).lower()
+            if phrase in text_lower:
+                logger.info("  %s → %s: 10-K match '%s'", ticker, parent, phrase)
+                return True
+
+    # Generic phrases are only meaningful when the parent alias is also present.
+    alias_present = any(
+        re.search(r"\b" + re.escape(alias.lower()) + r"\b", text_lower)
+        for alias in aliases
+    )
+    if alias_present:
+        for phrase in generic:
+            if phrase.lower() in text_lower:
+                logger.info(
+                    "  %s → %s: 10-K match generic='%s' (alias present)",
+                    ticker, parent, phrase,
+                )
+                return True
+
+    return False
 
 
 # ---------- quality gates --------------------------------------------------------
@@ -249,8 +350,14 @@ def _check_quality_gates(
 # ---------- discover() main ------------------------------------------------------
 
 def discover(conn=None) -> int:
-    """Query Massive related-companies for each known parent, apply quality gates,
-    insert passing candidates as ACCUMULATING. Returns count of new insertions.
+    """Query Massive related-companies for each known parent, apply 3 gates,
+    insert passing candidates as ACCUMULATING, then immediately backfill RS
+    history for new candidates. Returns count of new insertions.
+
+    Gates applied in order:
+      1. Not a known parent (MEGA_CAPS list)
+      2. Quality: price >= $5, ADV >= $10M, listed >= 180 days
+      3. 10-K customer concentration: parent alias appears alongside customer phrases
     """
     _own_conn = conn is None
     if _own_conn:
@@ -268,6 +375,7 @@ def discover(conn=None) -> int:
         active_in_discovery, recently_failed = _build_exclude_sets(conn)
 
         inserted = 0
+        newly_inserted: list[tuple[str, str]] = []
 
         for parent in MEGA_CAPS:
             related = _fetch_related_companies(parent, api_key)
@@ -275,13 +383,30 @@ def discover(conn=None) -> int:
             time.sleep(_MASSIVE_RATE_SLEEP)
 
             for ticker in related:
+                # Gate 1: skip known parents (eliminates GOOG, AMD, INTC etc.)
+                if ticker in _VALID_PARENTS:
+                    logger.info("  SKIP: %s — is a known parent", ticker)
+                    continue
+
+                # Gate 2: quality (price, ADV, listing age)
                 passes, reason = _check_quality_gates(
                     ticker, conn, api_key,
                     in_graph, active_in_discovery, recently_failed,
                 )
-
                 if not passes:
                     logger.info("  SKIP: %s — %s", ticker, reason)
+                    continue
+
+                # Gate 3: 10-K customer concentration confirms parent dependency
+                text = _fetch_10k_text(ticker, api_key)
+                if not text:
+                    logger.info("  SKIP: %s — no 10-K sections available from Massive", ticker)
+                    continue
+                if not _check_customer_concentration(ticker, parent, text):
+                    logger.info(
+                        "  SKIP: %s — no customer dependency found in 10-K for parent %s",
+                        ticker, parent,
+                    )
                     continue
 
                 try:
@@ -296,14 +421,22 @@ def discover(conn=None) -> int:
                         """,
                         [ticker, parent],
                     )
-                    # Mark inserted in active set so duplicate parent hits are skipped
                     active_in_discovery.add(ticker)
+                    newly_inserted.append((ticker, parent))
                     inserted += 1
-                    logger.info("  NEW: %s → %s (via related-companies)", ticker, parent)
+                    logger.info("  NEW: %s → %s (10-K confirmed)", ticker, parent)
                 except Exception as exc:
                     logger.error("  %s → %s: insert failed: %s", ticker, parent, exc)
 
         logger.info("Discovery complete: %d new candidates inserted", inserted)
+
+        # Immediately backfill RS history for new candidates so backtests can
+        # run right after discover() without waiting for the next accumulate-rs job.
+        if newly_inserted:
+            logger.info("Backfilling RS for %d new candidates...", len(newly_inserted))
+            _backfill_rs_pairs(newly_inserted, conn)
+            _advance_accumulating_status(conn)
+
         return inserted
 
     finally:
@@ -312,6 +445,23 @@ def discover(conn=None) -> int:
 
 
 # ---------- RS accumulation ------------------------------------------------------
+
+def _advance_accumulating_status(conn) -> None:
+    """Transition ACCUMULATING candidates to READY_FOR_BACKTEST at 60+ RS days."""
+    conn.execute(
+        """
+        UPDATE discovery_candidates
+        SET status = 'READY_FOR_BACKTEST'
+        WHERE status = 'ACCUMULATING'
+          AND (ticker, parent) IN (
+              SELECT ticker, parent FROM rs_accumulation
+              GROUP BY ticker, parent
+              HAVING COUNT(DISTINCT date) >= ?
+          )
+        """,
+        [_RS_MIN_DAYS],
+    )
+
 
 def _load_price_series(ticker: str, conn) -> dict[str, float]:
     """Return {date_str: adj_close} for all available prices for ticker."""
@@ -371,6 +521,52 @@ def _compute_rs_series(
     return results
 
 
+def _backfill_rs_pairs(pairs: list[tuple[str, str]], conn) -> int:
+    """Backfill RS scores for the given (ticker, parent) pairs.
+
+    Loads full price series into memory, computes the 20-day rolling return
+    differential for all dates not yet accumulated, bulk-inserts via executemany.
+    Returns total rows inserted. Does NOT update status — caller is responsible.
+    """
+    if not pairs:
+        return 0
+
+    parent_cache: dict[str, dict[str, float]] = {}
+    inserted = 0
+
+    for ticker, parent in pairs:
+        child_prices = _load_price_series(ticker, conn)
+        if not child_prices:
+            continue
+
+        if parent not in parent_cache:
+            parent_cache[parent] = _load_price_series(parent, conn)
+        parent_prices = parent_cache[parent]
+        if not parent_prices:
+            continue
+
+        already = {
+            str(r[0])
+            for r in conn.execute(
+                "SELECT date FROM rs_accumulation WHERE ticker = ? AND parent = ?",
+                [ticker, parent],
+            ).fetchall()
+        }
+
+        new_rows = _compute_rs_series(child_prices, parent_prices, already)
+        if not new_rows:
+            continue
+
+        conn.executemany(
+            "INSERT OR IGNORE INTO rs_accumulation (ticker, parent, date, rs_score) VALUES (?, ?, ?, ?)",
+            [(ticker, parent, d, score) for d, score in new_rows],
+        )
+        inserted += len(new_rows)
+        logger.info("%s → %s: %d RS rows inserted", ticker, parent, len(new_rows))
+
+    return inserted
+
+
 def accumulate_rs(conn=None) -> int:
     """Backfill and extend RS scores for all ACCUMULATING candidates.
 
@@ -395,55 +591,8 @@ def accumulate_rs(conn=None) -> int:
         if not candidates:
             return 0
 
-        # Cache parent price series — multiple candidates share the same parent
-        parent_cache: dict[str, dict[str, float]] = {}
-        inserted = 0
-
-        for ticker, parent in candidates:
-            child_prices = _load_price_series(ticker, conn)
-            if not child_prices:
-                continue
-
-            if parent not in parent_cache:
-                parent_cache[parent] = _load_price_series(parent, conn)
-            parent_prices = parent_cache[parent]
-            if not parent_prices:
-                continue
-
-            already = {
-                str(r[0])
-                for r in conn.execute(
-                    "SELECT date FROM rs_accumulation WHERE ticker = ? AND parent = ?",
-                    [ticker, parent],
-                ).fetchall()
-            }
-
-            new_rows = _compute_rs_series(child_prices, parent_prices, already)
-            if not new_rows:
-                continue
-
-            conn.executemany(
-                "INSERT OR IGNORE INTO rs_accumulation (ticker, parent, date, rs_score) VALUES (?, ?, ?, ?)",
-                [(ticker, parent, d, score) for d, score in new_rows],
-            )
-            inserted += len(new_rows)
-            logger.info("%s → %s: %d RS rows inserted", ticker, parent, len(new_rows))
-
-        # Advance candidates that have reached 60 days of accumulation
-        conn.execute(
-            """
-            UPDATE discovery_candidates
-            SET status = 'READY_FOR_BACKTEST'
-            WHERE status = 'ACCUMULATING'
-              AND (ticker, parent) IN (
-                  SELECT ticker, parent FROM rs_accumulation
-                  GROUP BY ticker, parent
-                  HAVING COUNT(DISTINCT date) >= ?
-              )
-            """,
-            [_RS_MIN_DAYS],
-        )
-
+        inserted = _backfill_rs_pairs(list(candidates), conn)
+        _advance_accumulating_status(conn)
         return inserted
 
     finally:
