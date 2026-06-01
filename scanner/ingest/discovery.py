@@ -313,63 +313,121 @@ def discover(conn=None) -> int:
 
 # ---------- RS accumulation ------------------------------------------------------
 
-def _rolling_return(ticker: str, as_of: str, conn) -> Optional[float]:
-    """20-day rolling return for ticker as of date, no-lookahead."""
+def _load_price_series(ticker: str, conn) -> dict[str, float]:
+    """Return {date_str: adj_close} for all available prices for ticker."""
     rows = conn.execute(
-        """
-        SELECT adj_close FROM prices
-        WHERE ticker = ? AND date <= ?
-        ORDER BY date DESC LIMIT ?
-        """,
-        [ticker, as_of, _RS_LOOKBACK + 1],
+        "SELECT date, adj_close FROM prices WHERE ticker = ? ORDER BY date",
+        [ticker],
     ).fetchall()
+    return {str(r[0]): r[1] for r in rows if r[1] is not None}
 
-    if len(rows) < _RS_LOOKBACK + 1:
-        return None
-    latest = rows[0][0]
-    oldest = rows[-1][0]
-    if not oldest or oldest == 0:
-        return None
-    return (latest - oldest) / oldest
+
+def _compute_rs_series(
+    child_prices: dict[str, float],
+    parent_prices: dict[str, float],
+    already_accumulated: set[str],
+) -> list[tuple[str, float]]:
+    """Return [(date, rs_score)] for all dates not yet accumulated.
+
+    Loads both price series into memory and computes the rolling 20-day return
+    differential in a single pass — avoids per-date DB queries during backfill.
+    Only dates where both ticker and parent have at least _RS_LOOKBACK+1 bars
+    of history up to that point are included.
+    """
+    child_dates = sorted(child_prices)
+    parent_dates_set = set(parent_prices)
+
+    results: list[tuple[str, float]] = []
+
+    for i, d in enumerate(child_dates):
+        if d in already_accumulated:
+            continue
+        if d not in parent_dates_set:
+            continue
+
+        # Need _RS_LOOKBACK+1 bars up to and including d for both tickers
+        child_window = child_dates[max(0, i - _RS_LOOKBACK): i + 1]
+        if len(child_window) < _RS_LOOKBACK + 1:
+            continue
+
+        # Build parent window: last _RS_LOOKBACK+1 parent dates <= d
+        parent_window = sorted(dt for dt in parent_dates_set if dt <= d)
+        if len(parent_window) < _RS_LOOKBACK + 1:
+            continue
+        parent_window = parent_window[-(  _RS_LOOKBACK + 1):]
+
+        child_latest = child_prices[child_window[-1]]
+        child_oldest = child_prices[child_window[0]]
+        parent_latest = parent_prices[parent_window[-1]]
+        parent_oldest = parent_prices[parent_window[0]]
+
+        if not child_oldest or not parent_oldest:
+            continue
+
+        child_ret = (child_latest - child_oldest) / child_oldest
+        parent_ret = (parent_latest - parent_oldest) / parent_oldest
+        results.append((d, child_ret - parent_ret))
+
+    return results
 
 
 def accumulate_rs(conn=None) -> int:
-    """Compute daily RS score for all ACCUMULATING candidates. Returns rows inserted."""
+    """Backfill and extend RS scores for all ACCUMULATING candidates.
+
+    For each (ticker, parent) pair fetches full price history for both
+    into memory, computes the 20-day rolling return differential for every
+    date not yet in rs_accumulation, and bulk-inserts the results. On first
+    run after price backfill this inserts up to ~500 rows per candidate.
+    Returns total rows inserted.
+    """
     _own_conn = conn is None
     if _own_conn:
         conn = get_connection()
 
     try:
-        rows = conn.execute(
+        candidates = conn.execute(
             """
             SELECT ticker, parent FROM discovery_candidates
-            WHERE status = 'ACCUMULATING'
+            WHERE status IN ('ACCUMULATING', 'READY_FOR_BACKTEST')
             """
         ).fetchall()
 
-        if not rows:
+        if not candidates:
             return 0
 
-        today = date.today().isoformat()
+        # Cache parent price series — multiple candidates share the same parent
+        parent_cache: dict[str, dict[str, float]] = {}
         inserted = 0
 
-        for ticker, parent in rows:
-            child_ret = _rolling_return(ticker, today, conn)
-            parent_ret = _rolling_return(parent, today, conn)
-
-            if child_ret is None or parent_ret is None:
+        for ticker, parent in candidates:
+            child_prices = _load_price_series(ticker, conn)
+            if not child_prices:
                 continue
 
-            rs_score = child_ret - parent_ret
+            if parent not in parent_cache:
+                parent_cache[parent] = _load_price_series(parent, conn)
+            parent_prices = parent_cache[parent]
+            if not parent_prices:
+                continue
 
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO rs_accumulation (ticker, parent, date, rs_score)
-                VALUES (?, ?, ?, ?)
-                """,
-                [ticker, parent, today, rs_score],
+            already = {
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT date FROM rs_accumulation WHERE ticker = ? AND parent = ?",
+                    [ticker, parent],
+                ).fetchall()
+            }
+
+            new_rows = _compute_rs_series(child_prices, parent_prices, already)
+            if not new_rows:
+                continue
+
+            conn.executemany(
+                "INSERT OR IGNORE INTO rs_accumulation (ticker, parent, date, rs_score) VALUES (?, ?, ?, ?)",
+                [(ticker, parent, d, score) for d, score in new_rows],
             )
-            inserted += 1
+            inserted += len(new_rows)
+            logger.info("%s → %s: %d RS rows inserted", ticker, parent, len(new_rows))
 
         # Advance candidates that have reached 60 days of accumulation
         conn.execute(
