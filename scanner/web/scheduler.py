@@ -18,6 +18,8 @@ scheduler_status: dict[str, Any] = {
     "last_scan": None,
     "last_journal_capture": None,
     "last_theme_scan": None,
+    "last_discovery": None,
+    "last_accumulate_rs": None,
     "last_ingest_ok": None,
     "last_estimates_ok": None,
     "last_insiders_ok": None,
@@ -28,6 +30,8 @@ scheduler_status: dict[str, Any] = {
     "last_scan_ok": None,
     "last_journal_capture_ok": None,
     "last_theme_scan_ok": None,
+    "last_discovery_ok": None,
+    "last_accumulate_rs_ok": None,
 }
 
 # Module-level reference set by lifespan so api_status can query it.
@@ -51,6 +55,8 @@ _JOB_META = {
     "run_scan":             ("run-scan",             "last_scan",            "last_scan_ok"),
     "journal_capture":      ("journal-capture",      "last_journal_capture", "last_journal_capture_ok"),
     "scan_themes":          ("scan-themes",          "last_theme_scan",      "last_theme_scan_ok"),
+    "discovery":            ("discover",             "last_discovery",       "last_discovery_ok"),
+    "accumulate_rs":        ("accumulate-rs",        "last_accumulate_rs",   "last_accumulate_rs_ok"),
 }
 
 
@@ -205,17 +211,16 @@ def _job_estimates() -> None:
 
 
 def _job_insiders() -> None:
-    import requests as _requests
     from scanner.graph.loader import get_all_tickers
-    from scanner.ingest.insiders import _load_cik_map, _make_session, ingest_form4
+    from scanner.ingest.insiders import _load_cik_map, _make_edgar_session, ingest_form4
     from scanner.db import get_connection
 
     logger.info("Scheduled job: insider ingest starting")
     _status = "error"
     _message = ""
     try:
-        session = _make_session()
-        cik_map = _load_cik_map(session)
+        edgar_session = _make_edgar_session()
+        cik_map_cache = _load_cik_map(edgar_session)
         conn = get_connection()
         try:
             theme_tickers = [r[0] for r in conn.execute("SELECT DISTINCT ticker FROM themes").fetchall()]
@@ -228,7 +233,8 @@ def _job_insiders() -> None:
             for ticker in universe:
                 try:
                     rows = ingest_form4(
-                        ticker, lookback_days=365, conn=conn, cik_map=cik_map, session=session
+                        ticker, lookback_days=365, conn=conn,
+                        cik_map_cache=cik_map_cache, edgar_session=edgar_session,
                     )
                     total_rows += rows
                 except Exception as exc:
@@ -236,7 +242,7 @@ def _job_insiders() -> None:
                     logger.error("Insider ingest failed for %s: %s", ticker, exc)
         finally:
             conn.close()
-            session.close()
+            edgar_session.close()
         ok_ins = errors == 0
         scheduler_status["last_insiders_ok"] = ok_ins
         scheduler_status["last_insiders"] = datetime.utcnow().isoformat()
@@ -432,6 +438,50 @@ def _job_scan_themes() -> None:
         _write_activity_log("scan-themes", "error", str(exc)[:200])
 
 
+def _job_discovery() -> None:
+    from scanner.ingest.discovery import discover
+
+    logger.info("Scheduled job: discovery pipeline starting")
+    _status = "error"
+    _message = ""
+    try:
+        inserted = discover()
+        scheduler_status["last_discovery_ok"] = True
+        scheduler_status["last_discovery"] = datetime.utcnow().isoformat()
+        logger.info("Discovery job complete: %d new candidates", inserted)
+        _status = "success"
+        _message = f"{inserted} new candidates inserted"
+    except Exception as exc:
+        scheduler_status["last_discovery"] = datetime.utcnow().isoformat()
+        scheduler_status["last_discovery_ok"] = False
+        logger.error("Discovery job failed: %s", exc)
+        _message = str(exc)[:200]
+    finally:
+        _write_activity_log("discover", _status, _message)
+
+
+def _job_accumulate_rs() -> None:
+    from scanner.ingest.discovery import accumulate_rs
+
+    logger.info("Scheduled job: RS accumulation starting")
+    _status = "error"
+    _message = ""
+    try:
+        inserted = accumulate_rs()
+        scheduler_status["last_accumulate_rs_ok"] = True
+        scheduler_status["last_accumulate_rs"] = datetime.utcnow().isoformat()
+        logger.info("RS accumulation job complete: %d rows", inserted)
+        _status = "success"
+        _message = f"{inserted} rows inserted"
+    except Exception as exc:
+        scheduler_status["last_accumulate_rs"] = datetime.utcnow().isoformat()
+        scheduler_status["last_accumulate_rs_ok"] = False
+        logger.error("RS accumulation job failed: %s", exc)
+        _message = str(exc)[:200]
+    finally:
+        _write_activity_log("accumulate-rs", _status, _message)
+
+
 def create_scheduler():
     """Create and return a configured AsyncIOScheduler."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -526,6 +576,24 @@ def create_scheduler():
         CronTrigger(hour=9, minute=40, timezone="America/New_York"),
         id="scan_themes",
         name="scan-themes",
+        replace_existing=True,
+    )
+
+    # Daily 9:45 AM ET — RS accumulation for discovery candidates
+    scheduler.add_job(
+        _job_accumulate_rs,
+        CronTrigger(hour=9, minute=45, timezone="America/New_York"),
+        id="accumulate_rs",
+        name="accumulate-rs",
+        replace_existing=True,
+    )
+
+    # Weekly Sunday 6:00 AM ET — discovery pipeline (10-K analysis via Claude)
+    scheduler.add_job(
+        _job_discovery,
+        CronTrigger(day_of_week="sun", hour=6, minute=0, timezone="America/New_York"),
+        id="discovery",
+        name="discover",
         replace_existing=True,
     )
 

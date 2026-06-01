@@ -561,7 +561,7 @@ def ingest_insiders(
 
     from scanner.db import get_connection
     from scanner.graph.loader import get_all_tickers
-    from scanner.ingest.insiders import _load_cik_map, _make_session, ingest_form4
+    from scanner.ingest.insiders import _load_cik_map, _make_edgar_session, ingest_form4
 
     if tickers:
         universe = tickers
@@ -580,12 +580,12 @@ def ingest_insiders(
     )
 
     try:
-        session = _make_session()
+        edgar_session = _make_edgar_session()
     except ValueError as exc:
         console.print(f"[red]Configuration error:[/red] {exc}")
         sys.exit(1)
     try:
-        cik_map = _load_cik_map(session)
+        cik_map_cache = _load_cik_map(edgar_session)
     except Exception as exc:
         console.print(f"[red]Failed to load CIK map:[/red] {exc}")
         sys.exit(1)
@@ -599,7 +599,8 @@ def ingest_insiders(
         for ticker in universe:
             try:
                 rows = ingest_form4(
-                    ticker, lookback_days=lookback_days, conn=conn, cik_map=cik_map, session=session
+                    ticker, lookback_days=lookback_days, conn=conn,
+                    cik_map_cache=cik_map_cache, edgar_session=edgar_session,
                 )
                 total_rows += rows
                 ok_count += 1
@@ -609,7 +610,7 @@ def ingest_insiders(
                 console.print(f"  [red]{ticker}: {exc}[/red]")
     finally:
         conn.close()
-        session.close()
+        edgar_session.close()
 
     table = Table(title="Insider Ingest Summary", box=box.SIMPLE)
     table.add_column("Metric", style="bold")
@@ -3314,6 +3315,53 @@ def backtest_zscore() -> None:
         "[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
         "Results overstate performance.[/dim]\n"
     )
+
+
+@app.command()
+def discover(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show candidate count without inserting", is_flag=True),
+    ] = False,
+) -> None:
+    """Fetch XNAS universe, analyze 10-K filings via Claude Haiku, insert new ACCUMULATING candidates."""
+    from scanner.ingest.discovery import discover as _discover, _get_universe_candidates, _get_massive_key
+    from scanner.db import get_connection
+
+    if dry_run:
+        key = _get_massive_key()
+        if not key:
+            console.print("[red]MASSIVE_API_KEY not set[/red]")
+            raise typer.Exit(1)
+        conn = get_connection()
+        try:
+            candidates = _get_universe_candidates(key, conn)
+            console.print(f"[cyan]{len(candidates)} candidates eligible for discovery analysis[/cyan]")
+        finally:
+            conn.close()
+        return
+
+    console.print("[bold cyan]Running discovery pipeline...[/bold cyan]")
+    inserted = _discover()
+    console.print(f"[green]Discovery complete: {inserted} new candidates inserted[/green]")
+
+
+@app.command("accumulate-rs")
+def accumulate_rs_cmd() -> None:
+    """Compute daily RS score for ACCUMULATING candidates; advance to READY_FOR_BACKTEST at 60 days."""
+    from scanner.ingest.discovery import accumulate_rs
+
+    inserted = accumulate_rs()
+    console.print(f"[cyan]RS accumulation: {inserted} rows inserted[/cyan]")
+
+
+@app.command("run-discovery-backtests")
+def run_discovery_backtests_cmd() -> None:
+    """Run IC backtest for READY_FOR_BACKTEST candidates; auto-promote or mark FAILED."""
+    from scanner.ingest.discovery import run_discovery_backtests
+
+    processed = run_discovery_backtests()
+    console.print(f"[cyan]Discovery backtests: {processed} candidates processed[/cyan]")
 
 
 def main() -> None:

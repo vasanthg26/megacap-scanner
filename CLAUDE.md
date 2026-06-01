@@ -220,6 +220,34 @@ or interact with the regime gate. It is a warning only.
   1-2d → "EARNINGS TOMORROW" (red); 0d → "EARNINGS TODAY" (red).
 - Never use earnings proximity as a signal gate or composite modifier.
 
+## Insider Hybrid Architecture
+
+- **Massive API** = primary source for Form 4 transaction listing (uses `issuer_cik` param + `filing_date.gte` filter + `next_url` pagination)
+- **SEC EDGAR XML** = footnotes only, fetched only for accessions that contain at least one P (purchase) transaction
+- S-only accessions insert directly from Massive data — no XML fetch, no rate limit hit on EDGAR
+- CIK cached in `ticker_cik_map` table (populated from EDGAR `company_tickers.json` via `_load_cik_map`)
+- `SEC_USER_AGENT` still required for all EDGAR XML calls; `MASSIVE_API_KEY` required for Massive calls
+- Fallback to EDGAR-only when `MASSIVE_API_KEY` is absent
+- **PRLD canonical test must pass** after any changes to `insiders.py`: `python -m scanner ingest-insiders PRLD` and verify OrbiMed/Baker Bros buys are classified as `is_open_market = False`
+- `parse_form4_xml()` and the offering-participation filter are unchanged from the EDGAR-only implementation — do not modify without re-running PRLD test
+
+## Discovery Pipeline Invariants
+
+- `discovery_candidates` is append-only for audit trail (never DELETE rows; use status transitions)
+- Promotion requires `ic_h1 > 0.05` AND `ic_h2 > 0.05` — both halves positive (same bar as RS signal)
+- Failed tickers re-eligible for re-discovery after 90 days only
+- Claude confidence threshold: `>= 0.70`; dependency strength: `STRONG` or `MEDIUM` only
+- Dependency parents: must be in `MEGA_CAPS` list from `graph/loader.py`
+- **10-K sections**: use `business` + `risk_factors` via Massive `/stocks/filings/10-K/vX/sections`
+  (`customer_concentration` section is not available — returns empty results)
+- **Universe fetch**: Massive `/v3/reference/tickers?exchange=XNAS&type=CS&active=true` (no market_cap sort available)
+- Claude model: `claude-haiku-4-5-20251001` for 10-K analysis — Haiku only, never Sonnet for discovery
+- Scheduler: weekly discovery Sunday 6 AM ET; daily RS accumulation 9:45 AM ET
+- `_load_edges` is `@lru_cache` — `_append_to_dependencies_yaml` calls `_load_edges.cache_clear()` after write; restart process to pick up new edges in live server
+- Auto-promotion writes to `dependencies.yaml` directly — validate YAML format after any manual edits
+- IC backtest uses 5-day forward returns from `prices` table; minimum 10 observation pairs required
+- n=60 RS observations is the minimum to trigger backtest, not a statistical guarantee — treat promoted tickers as Watch candidates until 100+ observations accumulate in production
+
 ## Survivorship-Bias Warning
 
 yfinance only returns currently-listed tickers. Any backtest result using yfinance data

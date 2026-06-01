@@ -218,6 +218,46 @@ CREATE TABLE IF NOT EXISTS news_sentiment (
     article_url     TEXT,
     PRIMARY KEY (ticker, published_date, title)
 );
+
+CREATE TABLE IF NOT EXISTS ticker_cik_map (
+    ticker       VARCHAR NOT NULL,
+    cik          VARCHAR NOT NULL,
+    updated_date DATE    NOT NULL,
+    PRIMARY KEY (ticker)
+);
+
+CREATE TABLE IF NOT EXISTS discovery_candidates (
+    ticker               VARCHAR NOT NULL,
+    parent               VARCHAR NOT NULL,
+    dependency_strength  VARCHAR,
+    claude_confidence    DOUBLE,
+    revenue_pct          DOUBLE,
+    evidence             TEXT,
+    source_accession     VARCHAR,
+    discovered_date      DATE,
+    status               VARCHAR DEFAULT 'ACCUMULATING',
+    PRIMARY KEY (ticker, parent)
+);
+
+CREATE TABLE IF NOT EXISTS rs_accumulation (
+    ticker   VARCHAR NOT NULL,
+    parent   VARCHAR NOT NULL,
+    date     DATE    NOT NULL,
+    rs_score DOUBLE,
+    PRIMARY KEY (ticker, parent, date)
+);
+
+CREATE TABLE IF NOT EXISTS discovery_backtest_results (
+    ticker   VARCHAR NOT NULL,
+    parent   VARCHAR NOT NULL,
+    run_date DATE    NOT NULL,
+    ic_h1    DOUBLE,
+    ic_h2    DOUBLE,
+    ic_full  DOUBLE,
+    passed   BOOLEAN,
+    notes    TEXT,
+    PRIMARY KEY (ticker, parent, run_date)
+);
 """
 
 
