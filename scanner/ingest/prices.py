@@ -156,7 +156,25 @@ def ingest_all(tickers: list[str] | None = None, force_full: bool = False) -> di
     yf_start = (today - timedelta(days=3 * 365 + 5)).strftime("%Y-%m-%d")
     end = today.strftime("%Y-%m-%d")
 
-    universe = tickers or list(dict.fromkeys(get_all_tickers() + _THEME_TICKERS))
+    if tickers:
+        universe = tickers
+    else:
+        base = list(dict.fromkeys(get_all_tickers() + _THEME_TICKERS))
+        try:
+            _conn = get_connection()
+            try:
+                discovery_rows = _conn.execute(
+                    """
+                    SELECT DISTINCT ticker FROM discovery_candidates
+                    WHERE status IN ('ACCUMULATING', 'READY_FOR_BACKTEST')
+                    """
+                ).fetchall()
+                discovery_tickers = [r[0] for r in discovery_rows]
+            finally:
+                _conn.close()
+        except Exception:
+            discovery_tickers = []
+        universe = list(dict.fromkeys(base + discovery_tickers))
     results: dict[str, str] = {}
 
     api_key = _get_massive_key()
