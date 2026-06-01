@@ -1291,6 +1291,34 @@ async def api_run_scan_themes():
     return {"status": "failed", "error": "Theme scan job failed — check server logs"}
 
 
+@app.post("/api/run/discover")
+async def api_run_discover():
+    from scanner.web.scheduler import _job_discovery, scheduler_status
+    await asyncio.to_thread(_job_discovery)
+    if scheduler_status.get("last_discovery_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "Discovery job failed — check server logs"}
+
+
+@app.post("/api/run/accumulate-rs")
+async def api_run_accumulate_rs():
+    from scanner.web.scheduler import _job_accumulate_rs, scheduler_status
+    await asyncio.to_thread(_job_accumulate_rs)
+    if scheduler_status.get("last_accumulate_rs_ok"):
+        return {"status": "success"}
+    return {"status": "failed", "error": "RS accumulation failed — check server logs"}
+
+
+@app.get("/api/discovery")
+async def api_discovery():
+    from scanner.ingest.discovery import get_discovery_display
+    conn = get_connection()
+    try:
+        return get_discovery_display(conn)
+    finally:
+        conn.close()
+
+
 @app.post("/api/run/all")
 async def api_run_all():
     from scanner.web.scheduler import (
