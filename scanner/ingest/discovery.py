@@ -397,7 +397,7 @@ def _extract_concentration(
     resolved_by is one of: 'explicit', 'regex', 'haiku'.
     """
     sections: dict[str, str] = {}
-    accession_number = ""
+    filing_year = ""  # derived from filing_date in Massive response — stable across runs
 
     for section in ("business", "risk_factors"):
         # Skip risk_factors if business came back empty — no point burning an API call
@@ -412,9 +412,11 @@ def _extract_concentration(
             resp.raise_for_status()
             time.sleep(_MASSIVE_RATE_SLEEP)
             results = resp.json().get("results", [])
-            # Capture accession_number from the first section that returns results
-            if results and not accession_number:
-                accession_number = results[0].get("accession_number", "") or ""
+            # Derive a stable cache key from the filing date year (accession_number is
+            # never returned by Massive; date-based keys break the cache daily).
+            if results and not filing_year:
+                fd = results[0].get("filing_date") or results[0].get("filed_at") or ""
+                filing_year = f"10k_{str(fd)[:4]}" if fd else ""
             text = ""
             for result in results[:2]:
                 candidate = result.get("text", "")
@@ -430,10 +432,10 @@ def _extract_concentration(
             time.sleep(_MASSIVE_RATE_SLEEP)
 
     if not sections:
-        return []
+        return [], 0  # FIX: was bare `return []` — caused unpack error in discover()
 
-    if not accession_number:
-        accession_number = f"unknown_{ticker}_{date.today().isoformat()}"
+    if not filing_year:
+        filing_year = f"10k_{date.today().year}"
 
     business_text = sections.get("business", "")
     risk_factors_text = sections.get("risk_factors", "")
@@ -463,7 +465,7 @@ def _extract_concentration(
         if _is_placeholder(customer_name) and customer_name not in seen_parents:
             placeholder_attempts.append(customer_name)
             resolved = _resolve_placeholder(
-                ticker, accession_number, customer_name,
+                ticker, filing_year, customer_name,
                 business_text, risk_factors_text,
                 revenue_pct, massive_key, conn,
             )
@@ -472,32 +474,38 @@ def _extract_concentration(
                 seen_parents.add(r_parent)
                 found.append((r_parent, revenue_pct, resolved_by))
 
-    # Pass 1 — table rows: "| Customer A | 20 % | ..."
-    # Table rows don't end with .!? so the sentence splitter misses them entirely.
-    # Scan raw combined_text line by line for pipe-delimited rows.
-    _TABLE_ROW = re.compile(
-        r'^\s*\|\s*([^|]{3,60}?)\s*\|\s*(\d+(?:\.\d+)?)\s*%',
-        re.IGNORECASE,
-    )
-    for line in combined_text.splitlines():
-        m = _TABLE_ROW.match(line)
-        if m:
-            _process_match(m.group(1), m.group(2))
+    try:
+        # Pass 1 — table rows: "| Customer A | 20 % | ..."
+        # Table rows don't end with .!? so the sentence splitter misses them entirely.
+        # Scan raw combined_text line by line for pipe-delimited rows.
+        _TABLE_ROW = re.compile(
+            r'^\s*\|\s*([^|]{3,60}?)\s*\|\s*(\d+(?:\.\d+)?)\s*%',
+            re.IGNORECASE,
+        )
+        for line in combined_text.splitlines():
+            m = _TABLE_ROW.match(line)
+            if m and len(m.groups()) >= 2 and m.group(1) and m.group(2):
+                _process_match(m.group(1), m.group(2))
 
-    # Pass 2 — prose sentences
-    sentences = re.split(r'(?<=[.!?])\s+', combined_text)
-    for sentence in sentences:
-        for i, pattern in enumerate(CONCENTRATION_PATTERNS):
-            m = re.search(pattern, sentence, re.IGNORECASE)
-            if not m:
-                continue
-            # Patterns 0,2,3: group1=name, group2=pct; pattern 1,4: group1=pct, group2=name
-            if i in (1, 4):
-                pct_str, name_str = m.group(1), m.group(2)
-            else:
-                name_str, pct_str = m.group(1), m.group(2)
-            _process_match(name_str, pct_str)
-            break  # only first matching pattern per sentence
+        # Pass 2 — prose sentences
+        sentences = re.split(r'(?<=[.!?])\s+', combined_text)
+        for sentence in sentences:
+            for i, pattern in enumerate(CONCENTRATION_PATTERNS):
+                m = re.search(pattern, sentence, re.IGNORECASE)
+                if not m:
+                    continue
+                if len(m.groups()) < 2 or not m.group(1) or not m.group(2):
+                    continue
+                # Patterns 0,2,3: group1=name, group2=pct; pattern 1,4: group1=pct, group2=name
+                if i in (1, 4):
+                    pct_str, name_str = m.group(1), m.group(2)
+                else:
+                    name_str, pct_str = m.group(1), m.group(2)
+                _process_match(name_str, pct_str)
+                break  # only first matching pattern per sentence
+
+    except Exception as exc:
+        logger.error("%s: extraction parsing failed: %s", ticker, exc)
 
     return found, len(placeholder_attempts)
 
@@ -506,7 +514,7 @@ def _extract_concentration(
 
 def _resolve_placeholder(
     ticker: str,
-    accession_number: str,
+    filing_year: str,
     placeholder: str,
     business_text: str,
     risk_factors_text: str,
@@ -516,28 +524,31 @@ def _resolve_placeholder(
 ) -> tuple[Optional[str], float, str]:
     """Resolve a placeholder customer name to a known parent ticker.
 
+    filing_year is the stable cache key (e.g. '10k_2026') derived from the
+    Massive filing_date field — avoids daily key churn of date.today()-based keys.
+
     Returns (parent, confidence, resolved_by) — parent is None if unresolved.
     resolved_by: 'cache', 'regex', 'haiku', or 'unresolved'.
     """
-    logger.info("%s: %s = %.0f%% of revenue", ticker, placeholder, revenue_pct)
+    logger.info("%s: %s = %.0f%% of revenue — resolving...", ticker, placeholder, revenue_pct)
 
-    # Step 1 — check cache
+    # Step 1 — check cache (only trust resolved entries; skip stale 'unresolved' rows
+    # so a broken prior run with no API key doesn't permanently block haiku)
     cached = conn.execute(
         """
         SELECT resolved_parent, confidence, resolved_by
         FROM placeholder_resolutions
         WHERE ticker = ? AND accession_number = ? AND placeholder = ?
+          AND resolved_by != 'unresolved'
         """,
-        [ticker, accession_number, placeholder],
+        [ticker, filing_year, placeholder],
     ).fetchone()
     if cached:
         parent, conf, resolved_by = cached
-        if parent:
-            logger.info("  → Cache hit: %s (conf: %.2f, via %s)", parent, conf or 0.0, resolved_by)
+        logger.info("  → Cache hit: %s (conf: %.2f, via %s)", parent, conf or 0.0, resolved_by)
         return parent, conf or 0.0, resolved_by or "unresolved"
 
     # Step 2 — regex context clue resolution
-    # Gather the sentence containing the placeholder + 3 surrounding sentences
     all_text = f"{business_text}\n\n{risk_factors_text}"
     sentences = re.split(r'(?<=[.!?])\s+', all_text)
     context_sentences: list[str] = []
@@ -568,7 +579,7 @@ def _resolve_placeholder(
                  confidence, resolved_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
-            [ticker, accession_number, placeholder, best_parent, 0.85, "regex"],
+            [ticker, filing_year, placeholder, best_parent, 0.85, "regex"],
         )
         return best_parent, 0.85, "regex"
 
@@ -587,8 +598,8 @@ def _resolve_placeholder(
             ).strip()
 
     if not api_key:
-        logger.warning("  → No ANTHROPIC_API_KEY — placeholder unresolved")
-        _cache_unresolved(conn, ticker, accession_number, placeholder)
+        # Don't cache — next run with a working key should retry
+        logger.warning("  → No ANTHROPIC_API_KEY — placeholder unresolved (not cached)")
         return None, 0.0, "unresolved"
 
     # Race condition guard — check cache again before calling haiku
@@ -597,8 +608,9 @@ def _resolve_placeholder(
         SELECT resolved_parent, confidence, resolved_by
         FROM placeholder_resolutions
         WHERE ticker = ? AND accession_number = ? AND placeholder = ?
+          AND resolved_by != 'unresolved'
         """,
-        [ticker, accession_number, placeholder],
+        [ticker, filing_year, placeholder],
     ).fetchone()
     if cached:
         parent, conf, resolved_by = cached
@@ -608,14 +620,14 @@ def _resolve_placeholder(
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
 
-        # Build a ticker→names mapping string so Haiku can answer in tickers
+        # Format known companies as "TICKER (Name1/Name2)" so haiku answers in tickers
         known_list_str = ", ".join(
-            f"{ticker} ({'/'.join(aliases[:2])})"
-            for ticker, aliases in PARENT_ALIASES.items()
+            f"{t} ({'/'.join(aliases[:2])})"
+            for t, aliases in PARENT_ALIASES.items()
         )
 
         def _targeted_excerpt(text: str, needle: str, window: int = 2000) -> str:
-            """Return a window of chars centred on the first occurrence of needle."""
+            """Return a window centred on the first occurrence of needle in text."""
             if not text:
                 return ""
             idx = text.lower().find(needle.lower())
@@ -651,7 +663,6 @@ def _resolve_placeholder(
             messages=[{"role": "user", "content": user_msg}],
         )
         raw = message.content[0].text.strip()
-        # Strip markdown fences if present
         raw = re.sub(r'^```(?:json)?\s*', '', raw)
         raw = re.sub(r'\s*```$', '', raw)
 
@@ -659,12 +670,15 @@ def _resolve_placeholder(
         parsed = json.loads(raw)
         resolved_parent = parsed.get("resolved_parent")
         confidence = float(parsed.get("confidence", 0.0))
+        evidence = str(parsed.get("evidence", ""))[:150]
+
+        # Always log what Haiku returned so failures are visible
+        logger.info(
+            "  → Haiku: parent=%s conf=%.2f evidence=%s",
+            resolved_parent, confidence, evidence,
+        )
 
         if resolved_parent and confidence >= 0.70:
-            logger.info(
-                "%s %s: resolved via haiku → %s (conf: %.2f)",
-                ticker, placeholder, resolved_parent, confidence,
-            )
             conn.execute(
                 """
                 INSERT OR REPLACE INTO placeholder_resolutions
@@ -672,29 +686,41 @@ def _resolve_placeholder(
                      confidence, resolved_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
-                [ticker, accession_number, placeholder, resolved_parent, confidence, "haiku"],
+                [ticker, filing_year, placeholder, resolved_parent, confidence, "haiku"],
+            )
+            logger.info(
+                "  → RESOLVED: %s %s → %s (conf: %.2f, cached as %s)",
+                ticker, placeholder, resolved_parent, confidence, filing_year,
             )
             return resolved_parent, confidence, "haiku"
         else:
-            logger.info("%s %s: unresolved — skipping", ticker, placeholder)
-            _cache_unresolved(conn, ticker, accession_number, placeholder)
+            logger.info(
+                "  → Below threshold (%.2f < 0.70) — caching as haiku_low_conf",
+                confidence,
+            )
+            # Use 'haiku_low_conf' (not 'unresolved') so this IS returned from cache
+            # on subsequent runs — prevents re-calling Haiku every run for the same
+            # ticker/placeholder. 'unresolved' is reserved for broken-run entries that
+            # should be retried (no API key, etc.) and is filtered out by the cache query.
+            _cache_haiku_low_conf(conn, ticker, filing_year, placeholder)
             return None, 0.0, "unresolved"
 
     except Exception as exc:
-        logger.warning("%s %s: haiku call failed: %s — skipping", ticker, placeholder, exc)
-        _cache_unresolved(conn, ticker, accession_number, placeholder)
+        # Don't cache exceptions — allow retry on next run
+        logger.warning("%s %s: haiku call failed: %s — not cached, will retry", ticker, placeholder, exc)
         return None, 0.0, "unresolved"
 
 
-def _cache_unresolved(conn, ticker: str, accession_number: str, placeholder: str) -> None:
+def _cache_haiku_low_conf(conn, ticker: str, filing_year: str, placeholder: str) -> None:
+    """Cache a genuine Haiku low-confidence result. NOT filtered out by cache query."""
     conn.execute(
         """
         INSERT OR REPLACE INTO placeholder_resolutions
             (ticker, accession_number, placeholder, resolved_parent,
              confidence, resolved_by, created_at)
-        VALUES (?, ?, ?, NULL, 0.0, 'unresolved', CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, NULL, 0.0, 'haiku_low_conf', CURRENT_TIMESTAMP)
         """,
-        [ticker, accession_number, placeholder],
+        [ticker, filing_year, placeholder],
     )
 
 
