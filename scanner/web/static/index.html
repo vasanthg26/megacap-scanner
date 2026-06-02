@@ -1166,9 +1166,9 @@ function renderScan(data,c,dateElId,subStyle){
   var asOf=data.as_of||'';
   if(asOf&&dateElId){var de=document.getElementById(dateElId);if(de)de.textContent=subStyle?'as of '+fmtDate(asOf):fmtDate(asOf);}
   if(!groups.length){c.innerHTML='<div class="loading-overlay" style="color:var(--muted)">No scan results</div>';return;}
-  var W=[48,80,72,88,96,160,72,88,72,54,60,64,128,120];
-  var L=['#','Ticker','Parent','Price','RS Score','Action','Est Rev','RVOL','Confirm','50MA','Range','Z-Score','Insiders','Earnings'];
-  var A=['left','left','left','','','left','','','','','','','left','left'];
+  var W=[48,80,72,88,80,96,160,72,88,72,54,60,64,128,120];
+  var L=['#','Ticker','Parent','Price','RS Score','RS Adj','Action','Est Rev','RVOL','Confirm','50MA','Range','Z-Score','Insiders','Earnings'];
+  var A=['left','left','left','','','','left','','','','','','','left','left'];
   var tb=groups.map(function(grp){
     var parent=grp.parent||'OTHER',regime=grp.parent_regime||'';
     var ret20d=grp.parent_20d_return!=null?grp.parent_20d_return:null;
@@ -1178,6 +1178,7 @@ function renderScan(data,c,dateElId,subStyle){
     var dRows=(grp.rows||[]).map(function(row){
       var tk=row.ticker||'',par=row.parent||'';
       var rsN=row.rs_score!=null?parseFloat(row.rs_score):null;
+      var rsAdj=row.rs_adj!=null?parseFloat(row.rs_adj):null;
       var erv=row.est_rev!=null?row.est_rev:null;
       var rvN=row.rvol!=null?row.rvol:null;
       var cfN=row.confirm!=null?row.confirm:null;
@@ -1199,6 +1200,7 @@ function renderScan(data,c,dateElId,subStyle){
         +'<td class="left"><span style="color:var(--muted);font-size:11px">'+par+'</span></td>'
         +'<td>'+fmt2(row.price)+'</td>'
         +'<td class="'+valClass(rsN)+'">'+(rsN!=null?fmtDec(rsN,4):'—')+(rsTrend?' '+rsTrend:'')+'</td>'
+        +'<td class="'+valClass(rsAdj)+'" title="Beta-adjusted RS — removes market beta to isolate supply chain signal">'+(rsAdj!=null?fmtDec(rsAdj,4):'—')+'</td>'
         +'<td class="left"><span class="'+actionClass(action)+'">'+(action||'—')+'</span>'+whyLink+'</td>'
         +'<td class="'+valClass(erv)+'">'+(erv!=null?fmtDec(erv,2):'—')+'</td>'
         +'<td class="'+rvolClass(rvN)+'">'+(rvN!=null?fmtRvol(rvN):'—')+(rvolTrend?' '+rvolTrend:'')+'</td>'

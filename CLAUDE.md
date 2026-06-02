@@ -339,6 +339,20 @@ curl -X POST https://web-production-a4cbb.up.railway.app/api/admin/force-full-in
 Set `ADMIN_TOKEN` in Railway Variables tab (any random string). Returns 401 if token
 is missing or wrong.
 
+## Beta-Adjusted RS — Implementation Status
+
+- Deployed as parallel signal (display only) — `scanner/signals/beta_rs.py`
+- Raw RS still drives all action labels, VALIDATED_PARENTS, TRADEABLE_REGIMES unchanged
+- `rs_adj` stored in `rs_accumulation` table alongside `rs_score` (new rows only)
+- Both signals shown side-by-side in web UI dependent scan table and CLI scan output
+- Discovery promotion still uses raw RS only — revisit after 30 days of adj RS data
+- `_SCAN_SCHEMA_VERSION` bumped to 3; pre-existing cached scans recomputed automatically
+
+### Key invariants
+- `compute_beta_adjusted_rs(child, parent, as_of, conn)` — no lookahead; `date <= as_of`
+- rs_adj is **unweighted** (no edge-weight scaling) — unlike raw rs_score; discovery IC compares like-for-like
+- Returns `None` gracefully when SPY absent or history < 61 days; scan never crashes
+
 ## RESEARCH FINDINGS
 
 ### Beta-Adjusted RS Research (2026-06-02)

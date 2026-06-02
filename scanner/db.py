@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS rs_accumulation (
     parent   VARCHAR NOT NULL,
     date     DATE    NOT NULL,
     rs_score DOUBLE,
+    rs_adj   DOUBLE,
     PRIMARY KEY (ticker, parent, date)
 );
 
@@ -299,6 +300,7 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             "ALTER TABLE filings_8k ADD COLUMN sentiment VARCHAR",
             "ALTER TABLE filings_8k ADD COLUMN impact_explanation TEXT",
             "ALTER TABLE journal ADD COLUMN signal_source VARCHAR DEFAULT 'dependency'",
+            "ALTER TABLE rs_accumulation ADD COLUMN rs_adj DOUBLE",
         ]:
             try:
                 conn.execute(_stmt)

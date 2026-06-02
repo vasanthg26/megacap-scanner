@@ -1027,6 +1027,7 @@ def scan(
         table.add_column("Parent", width=7)
         table.add_column("Price", justify="right", width=10)
         table.add_column("RS Score", justify="right", width=12)
+        table.add_column("RS Adj", justify="right", width=10)
         table.add_column("Action", width=18)
         table.add_column("Rank", justify="right", width=10)
         if show_estimates:
@@ -1053,6 +1054,7 @@ def scan(
         ) -> None:
             from scanner.signals.confirmation import compute_confirmation_dependent
             from scanner.signals.earnings import format_earnings_flag
+            from scanner.signals.beta_rs import compute_beta_adjusted_rs
 
             action = classify_action(s, universe_scores)
             rank, total = score_rank(s, universe_scores)
@@ -1097,7 +1099,18 @@ def scan(
 
             rs_trend_val = rs_trend_flags.get((ticker, _parent), "—")
             rvol_trend_val = rvol_trend_flags.get(ticker, "—")
-            base_cells = [ticker, _parent, price_cell, _fmt_rs_with_trend(s, rs_trend_val), action_cell, f"({rank}/{total})"]
+
+            try:
+                rs_adj_val = compute_beta_adjusted_rs(ticker, _parent, as_of, conn)
+            except Exception:
+                rs_adj_val = None
+            if rs_adj_val is not None:
+                adj_color = "green" if rs_adj_val >= 0 else "red"
+                rs_adj_cell = f"[{adj_color}]{rs_adj_val:+.4f}[/{adj_color}]"
+            else:
+                rs_adj_cell = "[dim]—[/dim]"
+
+            base_cells = [ticker, _parent, price_cell, _fmt_rs_with_trend(s, rs_trend_val), rs_adj_cell, action_cell, f"({rank}/{total})"]
             if show_estimates:
                 base_cells.append(_fmt_revision(rev_score_val))
             base_cells.append(_fmt_rvol_trend(rvol_val, rvol_trend_val))

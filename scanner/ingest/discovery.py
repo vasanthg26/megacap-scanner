@@ -30,6 +30,7 @@ Promotion criteria (same evidentiary bar as main signal):
   ic_h1 > 0.05 AND ic_h2 > 0.05 (both halves positive)
 """
 
+import bisect
 import logging
 import math
 import re
@@ -50,6 +51,7 @@ _MASSIVE_BASE = "https://api.massive.com"
 _MASSIVE_RATE_SLEEP = 6.0   # 10 req/min starter plan
 
 _RS_LOOKBACK = 20           # trading days for rolling return
+_BETA_WINDOW = 60           # days for rolling beta estimation in rs_adj
 _RS_MIN_DAYS = 60           # days of accumulation before backtest
 _IC_THRESHOLD = 0.05
 _FAILED_REELIGIBLE_DAYS = 90
@@ -956,16 +958,67 @@ def _load_price_series(ticker: str, conn) -> dict[str, float]:
     return {str(r[0]): r[1] for r in rows if r[1] is not None}
 
 
+def _rolling_beta(
+    ticker_sorted: list[str],
+    ticker_px: dict[str, float],
+    spy_sorted: list[str],
+    spy_px: dict[str, float],
+    as_of: str,
+    beta_w: int,
+) -> float | None:
+    """Beta of ticker vs SPY over beta_w days ending at as_of. Returns None if insufficient."""
+    t_idx = bisect.bisect_right(ticker_sorted, as_of)
+    s_idx = bisect.bisect_right(spy_sorted, as_of)
+    if t_idx < beta_w + 1 or s_idx < beta_w + 1:
+        return None
+
+    t_window = ticker_sorted[t_idx - beta_w - 1: t_idx]
+    s_window = spy_sorted[s_idx - beta_w - 1: s_idx]
+
+    t_rets = []
+    for i in range(1, len(t_window)):
+        p0 = ticker_px[t_window[i - 1]]
+        if not p0:
+            return None
+        t_rets.append((ticker_px[t_window[i]] - p0) / p0)
+
+    s_rets = []
+    for i in range(1, len(s_window)):
+        p0 = spy_px[s_window[i - 1]]
+        if not p0:
+            return None
+        s_rets.append((spy_px[s_window[i]] - p0) / p0)
+
+    n = min(len(t_rets), len(s_rets), beta_w)
+    if n < beta_w // 2:
+        return None
+    t_rets, s_rets = t_rets[:n], s_rets[:n]
+
+    mean_t = sum(t_rets) / n
+    mean_s = sum(s_rets) / n
+    cov = sum((t_rets[i] - mean_t) * (s_rets[i] - mean_s) for i in range(n)) / (n - 1)
+    var_s = sum((r - mean_s) ** 2 for r in s_rets) / (n - 1)
+    if var_s == 0:
+        return None
+    return cov / var_s
+
+
 def _compute_rs_series(
     child_prices: dict[str, float],
     parent_prices: dict[str, float],
     already_accumulated: set[str],
-) -> list[tuple[str, float]]:
-    """Return [(date, rs_score)] for all dates not yet accumulated."""
-    child_dates = sorted(child_prices)
-    parent_dates_set = set(parent_prices)
+    spy_prices: dict[str, float] | None = None,
+) -> list[tuple[str, float, float | None]]:
+    """Return [(date, rs_score, rs_adj)] for all dates not yet accumulated.
 
-    results: list[tuple[str, float]] = []
+    rs_adj is None when spy_prices are absent or history is insufficient.
+    """
+    child_dates = sorted(child_prices)
+    parent_dates = sorted(parent_prices)
+    parent_dates_set = set(parent_dates)
+    spy_sorted = sorted(spy_prices) if spy_prices else []
+
+    results: list[tuple[str, float, float | None]] = []
 
     for i, d in enumerate(child_dates):
         if d in already_accumulated:
@@ -977,10 +1030,10 @@ def _compute_rs_series(
         if len(child_window) < _RS_LOOKBACK + 1:
             continue
 
-        parent_window = sorted(dt for dt in parent_dates_set if dt <= d)
-        if len(parent_window) < _RS_LOOKBACK + 1:
+        p_idx = bisect.bisect_right(parent_dates, d)
+        if p_idx < _RS_LOOKBACK + 1:
             continue
-        parent_window = parent_window[-(  _RS_LOOKBACK + 1):]
+        parent_window = parent_dates[p_idx - _RS_LOOKBACK - 1: p_idx]
 
         child_latest = child_prices[child_window[-1]]
         child_oldest = child_prices[child_window[0]]
@@ -992,19 +1045,36 @@ def _compute_rs_series(
 
         child_ret = (child_latest - child_oldest) / child_oldest
         parent_ret = (parent_latest - parent_oldest) / parent_oldest
-        results.append((d, child_ret - parent_ret))
+        raw_rs = child_ret - parent_ret
+
+        # Beta-adjusted RS
+        adj_rs: float | None = None
+        if spy_prices:
+            s_idx = bisect.bisect_right(spy_sorted, d)
+            if s_idx >= _RS_LOOKBACK + 1:
+                spy_oldest = spy_prices[spy_sorted[s_idx - _RS_LOOKBACK - 1]]
+                spy_latest = spy_prices[spy_sorted[s_idx - 1]]
+                if spy_oldest:
+                    spy_ret = (spy_latest - spy_oldest) / spy_oldest
+                    bc = _rolling_beta(child_dates, child_prices, spy_sorted, spy_prices, d, _BETA_WINDOW)
+                    bp = _rolling_beta(parent_dates, parent_prices, spy_sorted, spy_prices, d, _BETA_WINDOW)
+                    if bc is not None and bp is not None:
+                        adj_rs = (child_ret - bc * spy_ret) - (parent_ret - bp * spy_ret)
+
+        results.append((d, raw_rs, adj_rs))
 
     return results
 
 
 def _backfill_rs_pairs(pairs: list[tuple[str, str]], conn) -> int:
-    """Backfill RS scores for the given (ticker, parent) pairs.
+    """Backfill RS scores (raw and beta-adjusted) for the given (ticker, parent) pairs.
 
     Returns total rows inserted.
     """
     if not pairs:
         return 0
 
+    spy_prices = _load_price_series("SPY", conn)
     parent_cache: dict[str, dict[str, float]] = {}
     inserted = 0
 
@@ -1027,13 +1097,13 @@ def _backfill_rs_pairs(pairs: list[tuple[str, str]], conn) -> int:
             ).fetchall()
         }
 
-        new_rows = _compute_rs_series(child_prices, parent_prices, already)
+        new_rows = _compute_rs_series(child_prices, parent_prices, already, spy_prices or None)
         if not new_rows:
             continue
 
         conn.executemany(
-            "INSERT OR IGNORE INTO rs_accumulation (ticker, parent, date, rs_score) VALUES (?, ?, ?, ?)",
-            [(ticker, parent, d, score) for d, score in new_rows],
+            "INSERT OR IGNORE INTO rs_accumulation (ticker, parent, date, rs_score, rs_adj) VALUES (?, ?, ?, ?, ?)",
+            [(ticker, parent, d, score, adj) for d, score, adj in new_rows],
         )
         inserted += len(new_rows)
         logger.info("%s → %s: %d RS rows inserted", ticker, parent, len(new_rows))

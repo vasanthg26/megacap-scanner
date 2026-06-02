@@ -23,7 +23,7 @@ _cache: dict[str, tuple[Any, datetime]] = {}
 _CACHE_TTL_SECONDS = 600  # 10 minutes
 
 # Bump when new fields are added to scan results — forces DB cache invalidation
-_SCAN_SCHEMA_VERSION = 2
+_SCAN_SCHEMA_VERSION = 3
 
 
 def _cache_get(key: str) -> Any | None:
@@ -362,6 +362,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
     from scanner.db import get_connection
     from scanner.graph.loader import MEGA_CAPS, get_dependents
     from scanner.signals.relative_strength import RelativeStrengthVsParent
+    from scanner.signals.beta_rs import compute_beta_adjusted_rs
     from scanner.enrichment.insiders import get_insider_summary
     from scanner.signals.base import (
         classify_action, score_rank, classify_regime,
@@ -385,6 +386,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
             parent_returns[mc] = ret_20d
 
         per_parent: dict[str, list[tuple[str, float]]] = {}
+        adj_by_pair: dict[tuple[str, str], float | None] = {}
         for parent in MEGA_CAPS:
             edges = get_dependents(parent)
             if not edges:
@@ -397,6 +399,12 @@ def _compute_scan_sync(scan_date: str) -> dict:
                 s = signal.compute(edge.child, scan_date, conn)
                 if not math.isnan(s):
                     seen[edge.child] = s
+                try:
+                    adj_by_pair[(edge.child, parent)] = compute_beta_adjusted_rs(
+                        edge.child, parent, scan_date, conn
+                    )
+                except Exception:
+                    adj_by_pair[(edge.child, parent)] = None
             per_parent[parent] = sorted(seen.items(), key=lambda x: x[1], reverse=True)
 
         universe_scores = [s for rows in per_parent.values() for _, s in rows]
@@ -498,6 +506,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
                         "parent": parent,
                         "price": ticker_prices.get(ticker),
                         "rs_score": _nan_to_none(s),
+                        "rs_adj": adj_by_pair.get((ticker, parent)),
                         "rank": rank,
                         "total": total,
                         "action_label": action_label,
