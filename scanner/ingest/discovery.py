@@ -395,7 +395,12 @@ def _extract_concentration(
     resolved_by is one of: 'explicit', 'regex', 'haiku'.
     """
     sections: dict[str, str] = {}
+    accession_number = ""
+
     for section in ("business", "risk_factors"):
+        # Skip risk_factors if business came back empty — no point burning an API call
+        if section == "risk_factors" and not sections:
+            break
         try:
             resp = requests.get(
                 f"{_MASSIVE_BASE}/stocks/filings/10-K/vX/sections",
@@ -405,6 +410,9 @@ def _extract_concentration(
             resp.raise_for_status()
             time.sleep(_MASSIVE_RATE_SLEEP)
             results = resp.json().get("results", [])
+            # Capture accession_number from the first section that returns results
+            if results and not accession_number:
+                accession_number = results[0].get("accession_number", "") or ""
             text = ""
             for result in results[:2]:
                 candidate = result.get("text", "")
@@ -422,6 +430,9 @@ def _extract_concentration(
     if not sections:
         return []
 
+    if not accession_number:
+        accession_number = f"unknown_{ticker}_{date.today().isoformat()}"
+
     business_text = sections.get("business", "")
     risk_factors_text = sections.get("risk_factors", "")
     combined_text = "\n\n".join(sections.values())
@@ -429,24 +440,6 @@ def _extract_concentration(
     sentences = re.split(r'(?<=[.!?])\s+', combined_text)
     found: list[tuple[str, float, str]] = []
     seen_parents: set[str] = set()
-
-    # Try to extract the filing accession number for placeholder cache key
-    accession_number = ""
-    try:
-        resp = requests.get(
-            f"{_MASSIVE_BASE}/stocks/filings/10-K/vX/sections",
-            params={"ticker": ticker, "section": "business", "apiKey": massive_key},
-            timeout=30,
-        )
-        time.sleep(_MASSIVE_RATE_SLEEP)
-        results = resp.json().get("results", [])
-        if results:
-            accession_number = results[0].get("accession_number", "") or ""
-    except Exception:
-        pass
-
-    if not accession_number:
-        accession_number = f"unknown_{ticker}_{date.today().isoformat()}"
 
     for sentence in sentences:
         for i, pattern in enumerate(CONCENTRATION_PATTERNS):
@@ -808,12 +801,18 @@ def discover(conn=None) -> int:
         active_in_discovery, recently_failed = _build_exclude_sets(conn)
 
         new_pairs: list[tuple[str, str, float, str]] = []
+        total = len(candidates)
 
-        for ticker in candidates:
+        for idx, ticker in enumerate(candidates, 1):
+            logger.info("[%d/%d] %s: fetching 10-K...", idx, total, ticker)
             try:
                 results = _extract_concentration(ticker, api_key, conn)
             except Exception as exc:
                 logger.error("%s: extraction failed: %s — skipping", ticker, exc)
+                continue
+
+            if not results:
+                logger.info("  → no concentration >= 10%% found — skip")
                 continue
 
             for parent, pct, resolved_by in results:
