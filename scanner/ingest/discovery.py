@@ -437,55 +437,63 @@ def _extract_concentration(
     risk_factors_text = sections.get("risk_factors", "")
     combined_text = "\n\n".join(sections.values())
 
-    sentences = re.split(r'(?<=[.!?])\s+', combined_text)
     found: list[tuple[str, float, str]] = []
     seen_parents: set[str] = set()
 
+    def _process_match(name_str: str, pct_str: str) -> None:
+        """Classify one (customer_name, revenue_pct) hit and append to found."""
+        try:
+            revenue_pct = float(pct_str)
+        except ValueError:
+            return
+        if revenue_pct < 10.0:
+            return
+        customer_name = re.sub(r'\s+', ' ', name_str).strip()
+
+        parent = _classify_customer_name(customer_name)
+        if parent and parent not in seen_parents:
+            seen_parents.add(parent)
+            logger.info("%s: EXPLICIT %s = %.0f%% of revenue ✅", ticker, parent, revenue_pct)
+            found.append((parent, revenue_pct, "explicit"))
+            return
+
+        if _is_placeholder(customer_name) and customer_name not in seen_parents:
+            resolved = _resolve_placeholder(
+                ticker, accession_number, customer_name,
+                business_text, risk_factors_text,
+                revenue_pct, massive_key, conn,
+            )
+            r_parent, _conf, resolved_by = resolved
+            if r_parent and r_parent not in seen_parents:
+                seen_parents.add(r_parent)
+                found.append((r_parent, revenue_pct, resolved_by))
+
+    # Pass 1 — table rows: "| Customer A | 20 % | ..."
+    # Table rows don't end with .!? so the sentence splitter misses them entirely.
+    # Scan raw combined_text line by line for pipe-delimited rows.
+    _TABLE_ROW = re.compile(
+        r'^\s*\|\s*([^|]{3,60}?)\s*\|\s*(\d+(?:\.\d+)?)\s*%',
+        re.IGNORECASE,
+    )
+    for line in combined_text.splitlines():
+        m = _TABLE_ROW.match(line)
+        if m:
+            _process_match(m.group(1), m.group(2))
+
+    # Pass 2 — prose sentences
+    sentences = re.split(r'(?<=[.!?])\s+', combined_text)
     for sentence in sentences:
         for i, pattern in enumerate(CONCENTRATION_PATTERNS):
             m = re.search(pattern, sentence, re.IGNORECASE)
             if not m:
                 continue
-
             # Patterns 0,2,3: group1=name, group2=pct; pattern 1,4: group1=pct, group2=name
             if i in (1, 4):
                 pct_str, name_str = m.group(1), m.group(2)
             else:
                 name_str, pct_str = m.group(1), m.group(2)
-
-            try:
-                revenue_pct = float(pct_str)
-            except ValueError:
-                continue
-
-            if revenue_pct < 10.0:
-                continue
-
-            customer_name = re.sub(r'\s+', ' ', name_str).strip()
-
-            # Path A — explicit name match
-            parent = _classify_customer_name(customer_name)
-            if parent and parent not in seen_parents:
-                seen_parents.add(parent)
-                logger.info(
-                    "%s: EXPLICIT %s = %.0f%% of revenue ✅",
-                    ticker, parent, revenue_pct,
-                )
-                found.append((parent, revenue_pct, "explicit"))
-                break
-
-            # Path B — placeholder
-            if _is_placeholder(customer_name) and customer_name not in seen_parents:
-                resolved = _resolve_placeholder(
-                    ticker, accession_number, customer_name,
-                    business_text, risk_factors_text,
-                    revenue_pct, massive_key, conn,
-                )
-                r_parent, _conf, resolved_by = resolved
-                if r_parent and r_parent not in seen_parents:
-                    seen_parents.add(r_parent)
-                    found.append((r_parent, revenue_pct, resolved_by))
-                break
+            _process_match(name_str, pct_str)
+            break  # only first matching pattern per sentence
 
     return found
 
