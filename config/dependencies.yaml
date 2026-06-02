@@ -150,13 +150,26 @@ edges:
     notes: Lithium carbonate supplier for battery production
 
   - parent: TSLA
-    child: LTHM
-    type: materials
-    weight: 0.65
-    notes: Lithium hydroxide for high-energy battery cells
-
-  - parent: TSLA
     child: STM
     type: semiconductor
     weight: 0.65
     notes: SiC MOSFET supplier for Tesla Model 3/Y powertrain
+
+  # GOOGL dependents
+  - parent: GOOGL
+    child: CRDO
+    type: semiconductor
+    weight: 0.7
+    notes: High-speed SerDes for Google TPU/data center networking
+
+  - parent: GOOGL
+    child: ALAB
+    type: semiconductor
+    weight: 0.65
+    notes: Silicon photonics for Google data center interconnects
+
+  - parent: GOOGL
+    child: VRT
+    type: cooling
+    weight: 0.7
+    notes: Data center cooling for Google Cloud infrastructure
