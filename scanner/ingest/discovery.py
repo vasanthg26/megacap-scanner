@@ -388,10 +388,12 @@ def _is_placeholder(customer_name: str) -> bool:
 
 def _extract_concentration(
     ticker: str, massive_key: str, conn
-) -> list[tuple[str, float, str]]:
+) -> tuple[list[tuple[str, float, str]], int]:
     """Fetch ticker's own 10-K and extract >10% revenue concentration in a known parent.
 
-    Returns list of (parent_ticker, revenue_pct, resolved_by) tuples.
+    Returns (results, placeholder_attempts) where:
+      results            — list of (parent_ticker, revenue_pct, resolved_by)
+      placeholder_attempts — count of placeholders detected (resolved or not)
     resolved_by is one of: 'explicit', 'regex', 'haiku'.
     """
     sections: dict[str, str] = {}
@@ -439,6 +441,7 @@ def _extract_concentration(
 
     found: list[tuple[str, float, str]] = []
     seen_parents: set[str] = set()
+    placeholder_attempts: list[str] = []  # names attempted through resolution path
 
     def _process_match(name_str: str, pct_str: str) -> None:
         """Classify one (customer_name, revenue_pct) hit and append to found."""
@@ -458,6 +461,7 @@ def _extract_concentration(
             return
 
         if _is_placeholder(customer_name) and customer_name not in seen_parents:
+            placeholder_attempts.append(customer_name)
             resolved = _resolve_placeholder(
                 ticker, accession_number, customer_name,
                 business_text, risk_factors_text,
@@ -495,7 +499,7 @@ def _extract_concentration(
             _process_match(name_str, pct_str)
             break  # only first matching pattern per sentence
 
-    return found
+    return found, len(placeholder_attempts)
 
 
 # ---------- placeholder resolution -----------------------------------------------
@@ -575,7 +579,12 @@ def _resolve_placeholder(
         if _SETTINGS_PATH.exists():
             with _SETTINGS_PATH.open() as f:
                 settings = yaml.safe_load(f) or {}
-            api_key = (settings.get("ANTHROPIC_API_KEY") or "").strip()
+            # settings.yaml may store the key as lowercase 'anthropic_api_key'
+            api_key = (
+                settings.get("ANTHROPIC_API_KEY")
+                or settings.get("anthropic_api_key")
+                or ""
+            ).strip()
 
     if not api_key:
         logger.warning("  → No ANTHROPIC_API_KEY — placeholder unresolved")
@@ -599,17 +608,36 @@ def _resolve_placeholder(
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
 
-        known_list = list(PARENT_ALIASES.keys())
+        # Build a ticker→names mapping string so Haiku can answer in tickers
+        known_list_str = ", ".join(
+            f"{ticker} ({'/'.join(aliases[:2])})"
+            for ticker, aliases in PARENT_ALIASES.items()
+        )
+
+        def _targeted_excerpt(text: str, needle: str, window: int = 2000) -> str:
+            """Return a window of chars centred on the first occurrence of needle."""
+            if not text:
+                return ""
+            idx = text.lower().find(needle.lower())
+            if idx == -1:
+                return text[:window]
+            start = max(0, idx - window // 4)
+            end = min(len(text), idx + window * 3 // 4)
+            return text[start:end]
+
+        biz_excerpt = _targeted_excerpt(business_text, placeholder)
+        risk_excerpt = _targeted_excerpt(risk_factors_text, placeholder)
+
         user_msg = (
             f"A company uses '{placeholder}' as a customer pseudonym in their 10-K filing. "
             f"This customer accounts for {revenue_pct:.0f}% of their revenue.\n\n"
             f"Based on these filing excerpts, which company from this list is most likely "
-            f"'{placeholder}'?\n\n"
-            f"Known companies to consider: {known_list}\n\n"
-            f"Business section excerpt:\n{business_text[:2000]}\n\n"
-            f"Risk factors excerpt:\n{risk_factors_text[:2000]}\n\n"
+            f"'{placeholder}'? Answer using the ticker symbol.\n\n"
+            f"Known companies (ticker: common names):\n{known_list_str}\n\n"
+            f"Business section excerpt (centred on '{placeholder}'):\n{biz_excerpt}\n\n"
+            f"Risk factors excerpt (centred on '{placeholder}'):\n{risk_excerpt}\n\n"
             'Respond in JSON only:\n'
-            '{"resolved_parent": "NVDA" or null, "confidence": 0.0-1.0, '
+            '{"resolved_parent": "TSM" or null, "confidence": 0.0-1.0, '
             '"evidence": "max 150 char quote"}'
         )
 
@@ -814,13 +842,19 @@ def discover(conn=None) -> int:
         for idx, ticker in enumerate(candidates, 1):
             logger.info("[%d/%d] %s: fetching 10-K...", idx, total, ticker)
             try:
-                results = _extract_concentration(ticker, api_key, conn)
+                results, placeholder_count = _extract_concentration(ticker, api_key, conn)
             except Exception as exc:
                 logger.error("%s: extraction failed: %s — skipping", ticker, exc)
                 continue
 
             if not results:
-                logger.info("  → no concentration >= 10%% found — skip")
+                if placeholder_count:
+                    logger.info(
+                        "  → %d placeholder(s) found but all unresolved — skip",
+                        placeholder_count,
+                    )
+                else:
+                    logger.info("  → no concentration >= 10%% found — skip")
                 continue
 
             for parent, pct, resolved_by in results:
