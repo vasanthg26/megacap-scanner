@@ -327,3 +327,51 @@ pytest --cov=scanner              # with coverage
 - `GET /api/admin/generate-summaries`
 - `GET /api/admin/test-anthropic`
 - `GET /api/debug`
+
+## RESEARCH FINDINGS
+
+### Beta-Adjusted RS Research (2026-06-02)
+
+Tested beta-adjusted RS vs raw RS on 5 validated pairs using full price history.
+
+**Formula:**
+```
+residual_child  = return_child  - (beta_child  × return_SPY)
+residual_parent = return_parent - (beta_parent × return_SPY)
+rs_adj = residual_child - residual_parent
+beta   = rolling 60-day cov(child, SPY) / var(SPY)
+```
+
+**Results:**
+- Avg raw IC:  0.095
+- Avg adj IC:  0.134  (+41% improvement)
+- Signal corr: 0.980  (same direction 98% of days)
+
+Key value: prevents false positives on macro regime shift days (tariff shock Apr 2025,
+CPI prints etc.) where high-beta stocks overshoot market moves.
+
+**Status: VALIDATED — implement in `signals.py` as next major feature after merge.**
+
+### Revenue Gate Decisions (2026-06-02)
+
+Based on beta-adjusted regime-conditional IC analysis:
+
+| Pair       | Decision | Overall IC | Correction IC | Notes                                    |
+|------------|----------|-----------|---------------|------------------------------------------|
+| ALAB→NVDA  | KEEP     | 0.362     | 0.471         |                                          |
+| MRVL→AMZN  | KEEP     | 0.200     | 0.154         |                                          |
+| DELL→NVDA  | KEEP     | 0.023     | 0.223         | Regime value — fires in correction       |
+| STM→TSLA   | KEEP     | 0.125     | —             | STRONG_UP profile                        |
+| ON→TSLA    | REMOVED  | -0.039    | -0.070        | Negative IC in all key regimes           |
+
+### ON Removal (2026-06-02)
+
+**ON removed from validated universe on 2026-06-02.**
+
+- Beta-adjusted overall IC: -0.039
+- Correction regime IC: -0.070
+- Fires in wrong direction in all key regimes
+
+Removed from:
+- `config/dependencies.yaml` (TSLA→ON edge deleted)
+- `scanner/ingest/discovery.py` ETF_FALLBACK_UNIVERSE (SOXX and DRIV lists)

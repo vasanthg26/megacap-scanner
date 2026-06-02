@@ -156,12 +156,6 @@ edges:
     notes: Lithium hydroxide for high-energy battery cells
 
   - parent: TSLA
-    child: "ON"
-    type: semiconductor
-    weight: 0.7
-    notes: SiC power modules for Tesla inverter systems
-
-  - parent: TSLA
     child: STM
     type: semiconductor
     weight: 0.65

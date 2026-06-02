@@ -84,7 +84,7 @@ ETF_FALLBACK_UNIVERSE: dict[str, list[str]] = {
     "SOXX": [
         "NVDA", "AVGO", "TSM", "QCOM",
         "TXN", "MU", "AMAT", "LRCX",
-        "KLAC", "MCHP", "MPWR", "ON",
+        "KLAC", "MCHP", "MPWR",
         "STM", "WOLF", "COHR", "AMKR",
         "MRVL", "SWKS", "QRVO", "CRUS",
     ],
@@ -102,7 +102,7 @@ ETF_FALLBACK_UNIVERSE: dict[str, list[str]] = {
         "OTIS", "JCI", "GNRC", "AOS",
     ],
     "DRIV": [
-        "ON", "STM", "APTV", "MGA",
+        "STM", "APTV", "MGA",
         "RIVN", "LCID", "ALB", "SQM",
         "ALTM", "LTHM", "CHPT", "BLNK",
         "EVGO", "NXPI", "INF", "WOLF",
