@@ -270,6 +270,17 @@ CREATE TABLE IF NOT EXISTS dependency_graph (
     status          VARCHAR DEFAULT 'ACTIVE',
     PRIMARY KEY (ticker, parent)
 );
+
+CREATE TABLE IF NOT EXISTS placeholder_resolutions (
+    ticker             VARCHAR NOT NULL,
+    accession_number   VARCHAR NOT NULL,
+    placeholder        VARCHAR NOT NULL,
+    resolved_parent    VARCHAR,
+    confidence         DOUBLE,
+    resolved_by        VARCHAR,
+    created_at         TIMESTAMP NOT NULL,
+    PRIMARY KEY (ticker, accession_number, placeholder)
+);
 """
 
 

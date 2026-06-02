@@ -236,18 +236,35 @@ or interact with the regime gate. It is a warning only.
 - `discovery_candidates` is append-only for audit trail (never DELETE rows; use status transitions)
 - Promotion requires `ic_h1 > 0.05` AND `ic_h2 > 0.05` — both halves positive (same bar as RS signal)
 - Failed tickers re-eligible for re-discovery after 90 days only
-- **Discovery source**: Parent 10-K sections via Massive — 2 calls per parent (business + risk_factors), 20 calls total per run, no Claude API
-  - `dependency_strength` and `claude_confidence` are always NULL for auto-discovered candidates
-  - `source_accession` = `'parent_10k_{parent}'` (e.g. `'parent_10k_NVDA'`) for traceability
-  - `COMPANY_TO_TICKER` map in `discovery.py` is the core of extraction — extend it as UNMATCHED logs surface new names
-  - `None` ticker entries in the map are intentional: surfaces non-US-listed names (Samsung, SK Hynix) as UNMATCHED logs
-  - Probe confirmed (2026-06-01): NVDA 10-K → HPE, LITE, MRVL extracted; Samsung UNMATCHED
-- **2 gates applied in order before insertion**:
-  - Gate 1 — Not a known parent: skip any ticker in MEGA_CAPS
-  - Gate 2 — Quality: price ≥ $5, ADV ≥ $10M, listed ≥ 180 days, not already in graph or discovery
-    - Price/ADV checked from `prices` table first; falls back to Massive aggs if ticker not in DB
-    - Listing age checked from oldest price date in DB; falls back to Massive ticker detail endpoint
-  - RS backfill runs immediately for newly inserted candidates
+
+### DISCOVERY PIPELINE — UNIVERSE SOURCE
+- 6 ETFs: SMH, SOXX, IGV, XLI, DRIV, GRID
+- Massive ETF holdings endpoint returns 404 — using `ETF_FALLBACK_UNIVERSE` hardcoded constituent lists
+- ~150-300 candidates after dedup and filtering
+- `source_accession` = `'etf_10k_{resolved_by}'` (e.g. `'etf_10k_explicit'`) for traceability
+
+### DISCOVERY PIPELINE — EXTRACTION METHOD
+- Read **candidate's own 10-K** (not parent's): business + risk_factors sections via Massive
+- SEC-mandated >10% customer concentration disclosure surfaces mega-cap dependents reliably
+- Sentence-bounded regex extraction using `CONCENTRATION_PATTERNS`
+- Two paths:
+  - **Explicit**: customer name matches `PARENT_ALIASES` → `resolved_by='explicit'`
+  - **Placeholder** ("Customer A", "one customer"): regex `CONTEXT_CLUES` (≥2 hits → `resolved_by='regex'`) → haiku fallback (≥0.70 confidence → `resolved_by='haiku'`)
+- `dependency_strength` = `'STRONG'` if pct ≥ 20%, else `'MEDIUM'`
+- `claude_confidence` is always NULL (haiku confidence stored only in `placeholder_resolutions`)
+
+### DISCOVERY PIPELINE — CACHE
+- `placeholder_resolutions(ticker, accession_number, placeholder, resolved_parent, confidence, resolved_by, created_at)` table
+- Haiku called **at most once** per (ticker, accession_number, placeholder) tuple — cached permanently
+- Race condition guard: cache checked twice (before regex, before haiku)
+
+### DISCOVERY PIPELINE — GATES
+- Gate 1 — Not a known parent: skip any ticker in `KNOWN_PARENTS`
+- Gate 2 — Quality: price ≥ $5, ADV ≥ $10M, listed ≥ 180 days, not already in graph or discovery
+  - Price/ADV checked from `prices` table first; falls back to Massive aggs if ticker not in DB
+  - Listing age checked from oldest price date in DB; falls back to Massive ticker detail endpoint
+- RS backfill runs immediately for newly inserted candidates
+
 - **Layer 2 (future)**: 8-K contract announcements — `"entered into agreement with {parent}"` / `"supply agreement with {parent}"` — implement when 10-K coverage is insufficient
 - Scheduler: weekly discovery Sunday 6 AM ET; daily RS accumulation 9:45 AM ET
 - `_load_edges` is `@lru_cache` — `_append_to_dependencies_yaml` calls `_load_edges.cache_clear()` after write; restart process to pick up new edges in live server

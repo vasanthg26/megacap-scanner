@@ -2,10 +2,9 @@
 
 Stages
 ======
-1. discover()        — weekly: read each known parent's 10-K to extract supplier /
-                       partner / customer mentions, match company names to tickers via
-                       COMPANY_TO_TICKER map, apply quality gates, insert passing
-                       tickers as ACCUMULATING, then immediately backfill RS history.
+1. discover()        — weekly: fetch ETF universe, read each candidate's own 10-K to
+                       find >10% revenue concentration in a known parent, apply quality
+                       gates, insert passing tickers as ACCUMULATING, backfill RS history.
 2. accumulate_rs()   — daily: compute rolling RS score for each ACCUMULATING candidate,
                        advance to READY_FOR_BACKTEST at 60 days
 3. run_discovery_backtests() — triggered: IC backtest on rs_accumulation, auto-promote
@@ -13,16 +12,22 @@ Stages
 
 Discovery source
 ================
-Parent 10-K (business + risk_factors sections via Massive) — 2 calls per parent,
-20 calls total. Company names extracted via SUPPLIER_PHRASES / CUSTOMER_PHRASES
-proximity matching; mapped to tickers via the COMPANY_TO_TICKER constant.
-UNMATCHED log lines surface new names to add to the map over time.
+Candidate's own 10-K (business + risk_factors via Massive). SEC-mandated disclosure of
+>10% customer concentration means mega-cap dependents are reliably surfaced. Two paths:
+  - Explicit: customer name matches a PARENT_ALIASES entry
+  - Placeholder: "Customer A" / "one customer" → regex context clues → haiku fallback
+
+Placeholder resolutions are cached permanently in the placeholder_resolutions table —
+haiku is called at most once per (ticker, accession, placeholder) tuple.
+
+ETF universe
+============
+6 ETFs: SMH, SOXX, IGV, XLI, DRIV, GRID
+Massive ETF holdings endpoint returns 404 — using hardcoded fallback constituent lists.
+~150-300 candidates after dedup and filtering.
 
 Promotion criteria (same evidentiary bar as main signal):
   ic_h1 > 0.05 AND ic_h2 > 0.05 (both halves positive)
-
-Auto-promotion note: graph loader uses @lru_cache; restart process after promotion
-to pick up new edges.
 """
 
 import logging
@@ -57,107 +62,135 @@ _MIN_LIST_DAYS = 180        # calendar days since IPO/listing
 _SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "settings.yaml"
 _DEPS_YAML_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "dependencies.yaml"
 
-_VALID_PARENTS = set(MEGA_CAPS)
+# ---------- ETF universe ---------------------------------------------------------
 
-# Phrases that indicate a supplier / manufacturing / dependency relationship.
-# Searched in the parent's 10-K text within 150 chars of a known company name.
-SUPPLIER_PHRASES: list[str] = [
-    "manufactured by",
-    "supplied by",
-    "fabricated by",
-    "we rely on",
-    "we depend on",
-    "sole supplier",
-    "primary supplier",
-    "key supplier",
-    "contract manufacturer",
-    "outsourced to",
-    "produced by",
-    "assembled by",
-    "our suppliers",
-    "third-party suppliers",
-    "vendor",
-    "partner",
-    "we purchase from",
-    "we source from",
+KNOWN_PARENTS = [
+    "NVDA", "MSFT", "META", "AAPL", "AMZN",
+    "GOOGL", "GOOG", "TSLA", "AVGO", "ORCL",
+    "TSM",
 ]
 
-# Phrases that indicate a customer / deployment relationship.
-CUSTOMER_PHRASES: list[str] = [
-    "our customers include",
-    "key customers",
-    "significant customers",
-    "largest customers",
-    "sold to",
-    "deployed by",
-    "used by",
-    "adopted by",
+DISCOVERY_ETFS = ["SMH", "SOXX", "IGV", "XLI", "DRIV", "GRID"]
+
+# Hardcoded fallback — Massive ETF holdings endpoint returns 404
+ETF_FALLBACK_UNIVERSE: dict[str, list[str]] = {
+    "SMH": [
+        "AMAT", "LRCX", "KLAC", "MCHP",
+        "MPWR", "SWKS", "QCOM", "TXN",
+        "MU", "WOLF", "COHR", "AMKR",
+        "ONTO", "AZTA", "KLIC", "GFS",
+        "ENTG", "CCMP", "ACLS", "AXTI",
+    ],
+    "SOXX": [
+        "NVDA", "AVGO", "TSM", "QCOM",
+        "TXN", "MU", "AMAT", "LRCX",
+        "KLAC", "MCHP", "MPWR", "ON",
+        "STM", "WOLF", "COHR", "AMKR",
+        "MRVL", "SWKS", "QRVO", "CRUS",
+    ],
+    "IGV": [
+        "CRM", "NOW", "SNOW", "DDOG",
+        "NET", "OKTA", "WDAY", "PLTR",
+        "ADBE", "CDNS", "SNPS", "ANSS",
+        "PTC", "MANH", "PAYC", "PCTY",
+        "GWRE", "NCNO", "BAND", "ALTR",
+    ],
+    "XLI": [
+        "GEV", "ETN", "PWR", "FIX",
+        "HUBB", "AMETEK", "ROK", "EMR",
+        "ITT", "TDY", "FWRD", "CARR",
+        "OTIS", "JCI", "GNRC", "AOS",
+    ],
+    "DRIV": [
+        "ON", "STM", "APTV", "MGA",
+        "RIVN", "LCID", "ALB", "SQM",
+        "ALTM", "LTHM", "CHPT", "BLNK",
+        "EVGO", "NXPI", "INF", "WOLF",
+    ],
+    "GRID": [
+        "VRT", "ETN", "PWR", "FIX",
+        "GEV", "CEG", "VST", "NRG",
+        "AES", "CWEN", "ARRY", "NOVA",
+        "RUN", "SEDG", "ENPH", "FSLR",
+    ],
+}
+
+# ---------- extraction constants -------------------------------------------------
+
+CONCENTRATION_PATTERNS = [
+    # "NVIDIA accounted for 67% of revenue"
+    r'(.{3,60}?)\s+accounted\s+for\s+(?:approximately\s+)?(\d+(?:\.\d+)?)\s*%\s+of\s+(?:our\s+)?(?:total\s+)?(?:net\s+)?revenue',
+    # "67% of revenue was from NVIDIA"
+    r'(\d+(?:\.\d+)?)\s*%\s+of\s+(?:our\s+)?(?:total\s+)?(?:net\s+)?revenue\s+(?:was\s+)?(?:from|derived\s+from)\s+(.{3,60}?)[,\.]',
+    # "NVIDIA represented 67% of net revenue"
+    r'(.{3,60}?)\s+represented\s+(?:approximately\s+)?(\d+(?:\.\d+)?)\s*%\s+of\s+(?:our\s+)?(?:total\s+)?(?:net\s+)?revenue',
+    # "NVIDIA was responsible for 67%"
+    r'(.{3,60}?)\s+was\s+responsible\s+for\s+(?:approximately\s+)?(\d+(?:\.\d+)?)\s*%\s+of\s+(?:our\s+)?(?:total\s+)?revenue',
+    # "revenue concentration of 67% from NVIDIA"
+    r'revenue\s+concentration\s+of\s+(\d+(?:\.\d+)?)\s*%\s+(?:from|with)\s+(.{3,60}?)[,\.]',
 ]
 
-# Maps company name substrings (case-insensitive, word-boundary matched) to tickers.
-# None = not US-listed; still logged as UNMATCHED so we know what was mentioned.
-# Extend this map as UNMATCHED log lines surface new names.
-COMPANY_TO_TICKER: dict[str, Optional[str]] = {
-    # Semiconductor / Hardware
-    "Taiwan Semiconductor": "TSM",
-    "TSMC": "TSM",
-    "Samsung": None,
-    "SK Hynix": None,
-    "Micron": "MU",
-    "Western Digital": "WDC",
-    "Seagate": "STX",
-    "Marvell": "MRVL",
-    "Globalfoundries": "GFS",
-    "Arista": "ANET",
-    "Coherent": "COHR",
-    "II-VI": "COHR",           # historical name; merged into Coherent
-    "Lumentum": "LITE",
-    "Viavi": "VIAV",
-    "Super Micro": "SMCI",
-    "Supermicro": "SMCI",
-    "Dell": "DELL",
-    "Hewlett Packard Enterprise": "HPE",
-    "HPE": "HPE",
-    "Vertiv": "VRT",
-    "Eaton": "ETN",
-    "Credo": "CRDO",
-    "Astera Labs": "ALAB",
-    "Celestica": "CLS",
-    "Flex": "FLEX",
-    "Jabil": "JBL",
-    "Kulicke": "KLIC",
-    "Amkor": "AMKR",
-    "Onto Innovation": "ONTO",
-    "Azenta": "AZTA",
-    "Wolfspeed": "WOLF",
-    # Cloud / Software
-    "Salesforce": "CRM",
-    "ServiceNow": "NOW",
-    "Workday": "WDAY",
-    "Snowflake": "SNOW",
-    "Datadog": "DDOG",
-    "Cloudflare": "NET",
-    "Okta": "OKTA",
-    "Palantir": "PLTR",
-    # EV / Auto suppliers
-    "Aptiv": "APTV",
-    "Magna": "MGA",
-    "Onsemi": "ON",
-    "ON Semiconductor": "ON",
-    "STMicroelectronics": "STM",
-    "Albemarle": "ALB",
-    "Arcadium Lithium": "ALTM",
-    "SQM": "SQM",              # foreign issuer (Chile); ADR on NYSE
-    "Rivian": "RIVN",
-    "Lucid": "LCID",
-    # Power / Infrastructure
-    "Hubbell": "HUBB",
-    "Quanta Services": "PWR",
-    "Comfort Systems": "FIX",
-    "GE Vernova": "GEV",
-    "Constellation Energy": "CEG",
-    "Vistra": "VST",
-    "NRG Energy": "NRG",
+PARENT_ALIASES: dict[str, list[str]] = {
+    "NVDA": ["NVIDIA", "NVIDIA Corporation", "NVIDIA Corp"],
+    "MSFT": ["Microsoft", "Microsoft Corporation", "Azure"],
+    "META": ["Meta", "Meta Platforms", "Facebook", "Instagram"],
+    "AAPL": ["Apple", "Apple Inc", "App Store"],
+    "AMZN": ["Amazon", "Amazon.com", "AWS", "Amazon Web Services"],
+    "GOOGL": ["Google", "Alphabet", "Google LLC", "YouTube"],
+    "TSLA": ["Tesla", "Tesla Inc", "Tesla Motors"],
+    "AVGO": ["Broadcom", "Broadcom Inc", "Broadcom Corporation"],
+    "ORCL": ["Oracle", "Oracle Corporation"],
+    "TSM": ["TSMC", "Taiwan Semiconductor", "Taiwan Semiconductor Manufacturing"],
+}
+
+PLACEHOLDER_PATTERNS = [
+    r'^Customer\s+[A-Z]$',
+    r'^Customer\s+\d+$',
+    r'^(?:a|one)\s+(?:single\s+)?customer$',
+    r'^(?:our\s+)?(?:largest|primary|key|significant)\s+customer$',
+    r'^(?:one|a)\s+(?:large|major)\s+customer$',
+]
+
+CONTEXT_CLUES: dict[str, list[str]] = {
+    "NVDA": [
+        "GPU", "graphics processing", "data center GPU", "H100", "A100",
+        "Blackwell", "Hopper", "NVLink", "CUDA", "accelerated computing",
+    ],
+    "TSLA": [
+        "electric vehicle", "EV", "silicon carbide", "SiC",
+        "autopilot", "battery electric", "drivetrain", "powertrain",
+    ],
+    "AAPL": [
+        "iPhone", "App Store", "iOS", "Mac", "AirPods",
+        "Apple Watch", "iPad",
+    ],
+    "AMZN": [
+        "AWS", "Amazon Web Services", "Prime", "Alexa",
+        "Kindle", "fulfillment center",
+    ],
+    "MSFT": [
+        "Azure", "Office 365", "Teams", "Xbox",
+        "Windows", "Dynamics", "GitHub",
+    ],
+    "META": [
+        "Facebook", "Instagram", "WhatsApp", "Oculus",
+        "Reality Labs", "metaverse",
+    ],
+    "GOOGL": [
+        "Google Search", "YouTube", "AdWords", "AdSense",
+        "Google Cloud", "Android", "Chrome",
+    ],
+    "AVGO": [
+        "custom AI accelerator", "XPU", "networking ASIC",
+        "Tomahawk", "Jericho",
+    ],
+    "ORCL": [
+        "Oracle Cloud", "OCI", "Oracle Database", "Oracle ERP",
+    ],
+    "TSM": [
+        "semiconductor fabrication", "wafer fabrication",
+        "foundry services", "advanced node",
+    ],
 }
 
 
@@ -177,142 +210,89 @@ def _get_massive_key() -> Optional[str]:
     return None
 
 
-# ---------- discovery source — parent 10-K extraction ---------------------------
+# ---------- ETF universe fetch ---------------------------------------------------
 
-def _fetch_parent_10k_text(parent: str, api_key: str) -> str:
-    """Fetch business + risk_factors sections from the parent's most recent 10-K.
+def _get_etf_universe(massive_key: str, conn) -> list[str]:
+    """Return deduplicated, filtered candidate ticker list from ETF constituents.
 
-    Returns combined text, or empty string when no filing is available.
-    Response shape confirmed via probe: {"results": [{"text": "...", ...}]}.
-    Falls back to the second-most-recent filing if the latest section is too short
-    (handles 10-K/A amendments that may have sparse section text).
+    Tries the Massive ETF holdings endpoint first; falls back to hardcoded lists
+    when the endpoint is unavailable (confirmed 404 on all Massive endpoints).
     """
-    combined: list[str] = []
-    for section in ("business", "risk_factors"):
+    etf_counts: dict[str, int] = {}
+    combined: set[str] = set()
+
+    for etf in DISCOVERY_ETFS:
+        constituents: list[str] = []
+
+        # Attempt live fetch
         try:
             resp = requests.get(
-                f"{_MASSIVE_BASE}/stocks/filings/10-K/vX/sections",
-                params={"ticker": parent, "section": section, "apiKey": api_key},
-                timeout=30,
+                f"{_MASSIVE_BASE}/v3/reference/tickers/{etf}/holdings",
+                params={"apiKey": massive_key},
+                timeout=15,
             )
-            resp.raise_for_status()
             time.sleep(_MASSIVE_RATE_SLEEP)
-            results = resp.json().get("results", [])
-            text = ""
-            for result in results[:2]:  # try most recent, then previous filing
-                candidate = result.get("text", "")
-                if len(candidate) >= 100:
-                    text = candidate
-                    break
-            if not text:
-                logger.warning(
-                    "%s: 10-K section '%s': empty or too short — skipping", parent, section
-                )
-                continue
-            combined.append(text)
+            if resp.status_code == 200:
+                data = resp.json()
+                holdings = data.get("holdings", data.get("results", []))
+                if holdings:
+                    constituents = [
+                        h.get("ticker") or h.get("symbol") or ""
+                        for h in holdings
+                        if h.get("ticker") or h.get("symbol")
+                    ]
         except Exception as exc:
-            logger.warning(
-                "%s: 10-K section '%s' fetch failed: %s — skipping", parent, section, exc
-            )
-            time.sleep(_MASSIVE_RATE_SLEEP)
-    return "\n\n".join(combined)
+            logger.warning("ETF %s: holdings fetch failed: %s — using fallback", etf, exc)
 
+        if not constituents:
+            constituents = ETF_FALLBACK_UNIVERSE.get(etf, [])
 
-def _extract_tickers_from_10k(text: str, parent: str) -> list[str]:
-    """Return tickers of companies co-mentioned with supplier/customer phrases.
+        etf_counts[etf] = len(constituents)
+        combined.update(constituents)
 
-    Splits text into sentences. For each sentence that contains at least one
-    SUPPLIER_PHRASES or CUSTOMER_PHRASES hit, scans all COMPANY_TO_TICKER keys.
-    A company name found in the same sentence as a relevant phrase → confirmed.
+    # Remove known parents and empty strings
+    combined.discard("")
+    for parent in KNOWN_PARENTS:
+        combined.discard(parent)
 
-    - Ticker not None → add to results
-    - Ticker is None → log UNMATCHED once per name (surfaces names to add to map)
-
-    Returns deduplicated list of tickers.
-    """
-    if not text:
-        return []
-
-    sentences = re.split(r"(?<=[.!?])\s+", text)
-    all_phrases = SUPPLIER_PHRASES + CUSTOMER_PHRASES
-    found: set[str] = set()
-    logged_unmatched: set[str] = set()
-
-    for sentence in sentences:
-        sentence_lower = sentence.lower()
-        if not any(phrase in sentence_lower for phrase in all_phrases):
-            continue
-        for company_name, ticker in COMPANY_TO_TICKER.items():
-            if company_name.lower() in sentence_lower:
-                if ticker is None:
-                    if company_name not in logged_unmatched:
-                        logger.info("  UNMATCHED: '%s' — not in ticker map", company_name)
-                        logged_unmatched.add(company_name)
-                else:
-                    found.add(ticker)
-
-    return list(found)
-
-
-# ---------- dependency_graph sync -----------------------------------------------
-
-def sync_dependency_graph(conn) -> None:
-    """Upsert all static edges from dependencies.yaml into dependency_graph table.
-
-    Called at the start of discover() so the table is always current before any
-    discovery logic runs. Uses INSERT OR IGNORE so existing promoted entries
-    (source='discovery_promoted') are not overwritten.
-    """
-    try:
-        with open(_DEPS_YAML_PATH) as f:
-            data = yaml.safe_load(f) or {}
-        edges = data.get("edges", [])
-        rows = [
-            (e["child"], e["parent"], "static_yaml", date.today().isoformat(),
-             None, None, None, "ACTIVE")
-            for e in edges
-            if e.get("child") and e.get("parent")
-        ]
-        conn.executemany(
-            """
-            INSERT OR IGNORE INTO dependency_graph
-                (ticker, parent, source, validated_date, ic_h1, ic_h2, ic_full, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        logger.info("dependency_graph: synced %d static edges from dependencies.yaml", len(rows))
-    except Exception as exc:
-        logger.error("dependency_graph sync failed: %s", exc)
-
-
-# ---------- quality gates --------------------------------------------------------
-
-def _already_in_graph() -> set[str]:
-    tickers = set(get_all_tickers())
-    tickers.update(MEGA_CAPS)
-    return tickers
-
-
-def _build_exclude_sets(conn) -> tuple[set[str], set[str]]:
-    """Return (active_in_discovery, recently_failed) sets for fast gate checks."""
-    cutoff = (date.today() - timedelta(days=_FAILED_REELIGIBLE_DAYS)).isoformat()
-
-    recently_failed = {
+    # Filter already promoted or active in graph
+    active_in_graph = set(get_all_tickers()) | set(MEGA_CAPS)
+    promoted = {
         r[0]
         for r in conn.execute(
-            "SELECT ticker FROM discovery_candidates WHERE status = 'FAILED' AND discovered_date >= ?",
-            [cutoff],
+            "SELECT ticker FROM discovery_candidates WHERE status = 'PROMOTED'"
         ).fetchall()
     }
-    active_in_discovery = {
-        r[0]
-        for r in conn.execute(
-            "SELECT ticker FROM discovery_candidates WHERE status != 'FAILED'",
-        ).fetchall()
-    }
-    return active_in_discovery, recently_failed
+    combined -= active_in_graph
+    combined -= promoted
 
+    # Price and ADV pre-filter using prices table (skip slow Massive calls here)
+    filtered: list[str] = []
+    for ticker in sorted(combined):
+        db_result = _price_adv_from_db(ticker, conn)
+        if db_result is not None:
+            latest_close, avg_dv, oldest_date = db_result
+            if latest_close < _MIN_PRICE or avg_dv < _MIN_ADV:
+                continue
+            try:
+                oldest = date.fromisoformat(oldest_date)
+                if (date.today() - oldest).days < _MIN_LIST_DAYS:
+                    continue
+            except ValueError:
+                pass
+        filtered.append(ticker)
+
+    counts_str = " ".join(f"{etf}:{etf_counts.get(etf, 0)}" for etf in DISCOVERY_ETFS)
+    logger.info(
+        "ETF universe: %d candidates (%s deduped and filtered: %d)",
+        len(combined) + len(active_in_graph & combined) + len(promoted & combined),
+        counts_str,
+        len(filtered),
+    )
+    return filtered
+
+
+# ---------- price / ADV helpers (unchanged) --------------------------------------
 
 def _price_adv_from_db(ticker: str, conn) -> Optional[tuple[float, float, str]]:
     """Return (latest_close, avg_daily_value, oldest_date) from prices table, or None."""
@@ -342,10 +322,7 @@ def _price_adv_from_db(ticker: str, conn) -> Optional[tuple[float, float, str]]:
 
 
 def _price_adv_from_massive(ticker: str, api_key: str) -> Optional[tuple[float, float]]:
-    """Fetch last 25 daily bars from Massive to compute price and ADV.
-
-    Returns (latest_close, avg_daily_dollar_volume) or None on failure.
-    """
+    """Fetch last 25 daily bars from Massive to compute price and ADV."""
     to_date = date.today().isoformat()
     from_date = (date.today() - timedelta(days=40)).isoformat()
     url = (
@@ -360,7 +337,6 @@ def _price_adv_from_massive(ticker: str, api_key: str) -> Optional[tuple[float, 
         results = data.get("results", [])
         if not results:
             return None
-        # results sorted desc: first is most recent
         latest_close = results[0].get("c")
         if latest_close is None:
             return None
@@ -387,15 +363,352 @@ def _list_date_from_massive(ticker: str, api_key: str) -> Optional[str]:
         return None
 
 
-def _check_quality_gates(
+# ---------- 10-K concentration extraction ----------------------------------------
+
+def _classify_customer_name(
+    customer_name: str,
+) -> Optional[str]:
+    """Return KNOWN_PARENT ticker if customer_name matches an alias, else None."""
+    name_lower = customer_name.lower().strip()
+    for parent, aliases in PARENT_ALIASES.items():
+        for alias in aliases:
+            if alias.lower() in name_lower or name_lower in alias.lower():
+                return parent
+    return None
+
+
+def _is_placeholder(customer_name: str) -> bool:
+    """Return True if customer_name looks like an anonymised placeholder."""
+    name = customer_name.strip()
+    for pattern in PLACEHOLDER_PATTERNS:
+        if re.match(pattern, name, re.IGNORECASE):
+            return True
+    return False
+
+
+def _extract_concentration(
+    ticker: str, massive_key: str, conn
+) -> list[tuple[str, float, str]]:
+    """Fetch ticker's own 10-K and extract >10% revenue concentration in a known parent.
+
+    Returns list of (parent_ticker, revenue_pct, resolved_by) tuples.
+    resolved_by is one of: 'explicit', 'regex', 'haiku'.
+    """
+    sections: dict[str, str] = {}
+    for section in ("business", "risk_factors"):
+        try:
+            resp = requests.get(
+                f"{_MASSIVE_BASE}/stocks/filings/10-K/vX/sections",
+                params={"ticker": ticker, "section": section, "apiKey": massive_key},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            time.sleep(_MASSIVE_RATE_SLEEP)
+            results = resp.json().get("results", [])
+            text = ""
+            for result in results[:2]:
+                candidate = result.get("text", "")
+                if len(candidate) >= 100:
+                    text = candidate
+                    break
+            if text:
+                sections[section] = text
+            else:
+                logger.debug("%s: 10-K section '%s' empty or too short — skipping", ticker, section)
+        except Exception as exc:
+            logger.warning("%s: 10-K section '%s' fetch failed: %s", ticker, section, exc)
+            time.sleep(_MASSIVE_RATE_SLEEP)
+
+    if not sections:
+        return []
+
+    business_text = sections.get("business", "")
+    risk_factors_text = sections.get("risk_factors", "")
+    combined_text = "\n\n".join(sections.values())
+
+    sentences = re.split(r'(?<=[.!?])\s+', combined_text)
+    found: list[tuple[str, float, str]] = []
+    seen_parents: set[str] = set()
+
+    # Try to extract the filing accession number for placeholder cache key
+    accession_number = ""
+    try:
+        resp = requests.get(
+            f"{_MASSIVE_BASE}/stocks/filings/10-K/vX/sections",
+            params={"ticker": ticker, "section": "business", "apiKey": massive_key},
+            timeout=30,
+        )
+        time.sleep(_MASSIVE_RATE_SLEEP)
+        results = resp.json().get("results", [])
+        if results:
+            accession_number = results[0].get("accession_number", "") or ""
+    except Exception:
+        pass
+
+    if not accession_number:
+        accession_number = f"unknown_{ticker}_{date.today().isoformat()}"
+
+    for sentence in sentences:
+        for i, pattern in enumerate(CONCENTRATION_PATTERNS):
+            m = re.search(pattern, sentence, re.IGNORECASE)
+            if not m:
+                continue
+
+            # Patterns 0,2,3: group1=name, group2=pct; pattern 1,4: group1=pct, group2=name
+            if i in (1, 4):
+                pct_str, name_str = m.group(1), m.group(2)
+            else:
+                name_str, pct_str = m.group(1), m.group(2)
+
+            try:
+                revenue_pct = float(pct_str)
+            except ValueError:
+                continue
+
+            if revenue_pct < 10.0:
+                continue
+
+            customer_name = re.sub(r'\s+', ' ', name_str).strip()
+
+            # Path A — explicit name match
+            parent = _classify_customer_name(customer_name)
+            if parent and parent not in seen_parents:
+                seen_parents.add(parent)
+                logger.info(
+                    "%s: EXPLICIT %s = %.0f%% of revenue ✅",
+                    ticker, parent, revenue_pct,
+                )
+                found.append((parent, revenue_pct, "explicit"))
+                break
+
+            # Path B — placeholder
+            if _is_placeholder(customer_name) and customer_name not in seen_parents:
+                resolved = _resolve_placeholder(
+                    ticker, accession_number, customer_name,
+                    business_text, risk_factors_text,
+                    revenue_pct, massive_key, conn,
+                )
+                r_parent, _conf, resolved_by = resolved
+                if r_parent and r_parent not in seen_parents:
+                    seen_parents.add(r_parent)
+                    found.append((r_parent, revenue_pct, resolved_by))
+                break
+
+    return found
+
+
+# ---------- placeholder resolution -----------------------------------------------
+
+def _resolve_placeholder(
     ticker: str,
+    accession_number: str,
+    placeholder: str,
+    business_text: str,
+    risk_factors_text: str,
+    revenue_pct: float,
+    massive_key: str,
     conn,
-    api_key: str,
+) -> tuple[Optional[str], float, str]:
+    """Resolve a placeholder customer name to a known parent ticker.
+
+    Returns (parent, confidence, resolved_by) — parent is None if unresolved.
+    resolved_by: 'cache', 'regex', 'haiku', or 'unresolved'.
+    """
+    logger.info("%s: %s = %.0f%% of revenue", ticker, placeholder, revenue_pct)
+
+    # Step 1 — check cache
+    cached = conn.execute(
+        """
+        SELECT resolved_parent, confidence, resolved_by
+        FROM placeholder_resolutions
+        WHERE ticker = ? AND accession_number = ? AND placeholder = ?
+        """,
+        [ticker, accession_number, placeholder],
+    ).fetchone()
+    if cached:
+        parent, conf, resolved_by = cached
+        if parent:
+            logger.info("  → Cache hit: %s (conf: %.2f, via %s)", parent, conf or 0.0, resolved_by)
+        return parent, conf or 0.0, resolved_by or "unresolved"
+
+    # Step 2 — regex context clue resolution
+    # Gather the sentence containing the placeholder + 3 surrounding sentences
+    all_text = f"{business_text}\n\n{risk_factors_text}"
+    sentences = re.split(r'(?<=[.!?])\s+', all_text)
+    context_sentences: list[str] = []
+    for idx, s in enumerate(sentences):
+        if placeholder.lower() in s.lower():
+            start = max(0, idx - 1)
+            end = min(len(sentences), idx + 4)
+            context_sentences = sentences[start:end]
+            break
+    context_window = " ".join(context_sentences).lower()
+
+    clue_hits: dict[str, int] = {}
+    for parent, clues in CONTEXT_CLUES.items():
+        hits = sum(1 for clue in clues if clue.lower() in context_window)
+        if hits > 0:
+            clue_hits[parent] = hits
+
+    best_parent = max(clue_hits, key=lambda p: clue_hits[p]) if clue_hits else None
+    if best_parent and clue_hits[best_parent] >= 2:
+        logger.info(
+            "  → Regex: '%s' (%d clue hits) → %s",
+            placeholder, clue_hits[best_parent], best_parent,
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO placeholder_resolutions
+                (ticker, accession_number, placeholder, resolved_parent,
+                 confidence, resolved_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            [ticker, accession_number, placeholder, best_parent, 0.85, "regex"],
+        )
+        return best_parent, 0.85, "regex"
+
+    # Step 3 — Haiku fallback
+    import os
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        if _SETTINGS_PATH.exists():
+            with _SETTINGS_PATH.open() as f:
+                settings = yaml.safe_load(f) or {}
+            api_key = (settings.get("ANTHROPIC_API_KEY") or "").strip()
+
+    if not api_key:
+        logger.warning("  → No ANTHROPIC_API_KEY — placeholder unresolved")
+        _cache_unresolved(conn, ticker, accession_number, placeholder)
+        return None, 0.0, "unresolved"
+
+    # Race condition guard — check cache again before calling haiku
+    cached = conn.execute(
+        """
+        SELECT resolved_parent, confidence, resolved_by
+        FROM placeholder_resolutions
+        WHERE ticker = ? AND accession_number = ? AND placeholder = ?
+        """,
+        [ticker, accession_number, placeholder],
+    ).fetchone()
+    if cached:
+        parent, conf, resolved_by = cached
+        return parent, conf or 0.0, resolved_by or "unresolved"
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        known_list = list(PARENT_ALIASES.keys())
+        user_msg = (
+            f"A company uses '{placeholder}' as a customer pseudonym in their 10-K filing. "
+            f"This customer accounts for {revenue_pct:.0f}% of their revenue.\n\n"
+            f"Based on these filing excerpts, which company from this list is most likely "
+            f"'{placeholder}'?\n\n"
+            f"Known companies to consider: {known_list}\n\n"
+            f"Business section excerpt:\n{business_text[:2000]}\n\n"
+            f"Risk factors excerpt:\n{risk_factors_text[:2000]}\n\n"
+            'Respond in JSON only:\n'
+            '{"resolved_parent": "NVDA" or null, "confidence": 0.0-1.0, '
+            '"evidence": "max 150 char quote"}'
+        )
+
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            system=(
+                "You are a financial analyst reading SEC 10-K filings. "
+                "Respond only in JSON. No preamble. No markdown."
+            ),
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw = message.content[0].text.strip()
+        # Strip markdown fences if present
+        raw = re.sub(r'^```(?:json)?\s*', '', raw)
+        raw = re.sub(r'\s*```$', '', raw)
+
+        import json
+        parsed = json.loads(raw)
+        resolved_parent = parsed.get("resolved_parent")
+        confidence = float(parsed.get("confidence", 0.0))
+
+        if resolved_parent and confidence >= 0.70:
+            logger.info(
+                "%s %s: resolved via haiku → %s (conf: %.2f)",
+                ticker, placeholder, resolved_parent, confidence,
+            )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO placeholder_resolutions
+                    (ticker, accession_number, placeholder, resolved_parent,
+                     confidence, resolved_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                [ticker, accession_number, placeholder, resolved_parent, confidence, "haiku"],
+            )
+            return resolved_parent, confidence, "haiku"
+        else:
+            logger.info("%s %s: unresolved — skipping", ticker, placeholder)
+            _cache_unresolved(conn, ticker, accession_number, placeholder)
+            return None, 0.0, "unresolved"
+
+    except Exception as exc:
+        logger.warning("%s %s: haiku call failed: %s — skipping", ticker, placeholder, exc)
+        _cache_unresolved(conn, ticker, accession_number, placeholder)
+        return None, 0.0, "unresolved"
+
+
+def _cache_unresolved(conn, ticker: str, accession_number: str, placeholder: str) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO placeholder_resolutions
+            (ticker, accession_number, placeholder, resolved_parent,
+             confidence, resolved_by, created_at)
+        VALUES (?, ?, ?, NULL, 0.0, 'unresolved', CURRENT_TIMESTAMP)
+        """,
+        [ticker, accession_number, placeholder],
+    )
+
+
+# ---------- quality gate ---------------------------------------------------------
+
+def _already_in_graph() -> set[str]:
+    tickers = set(get_all_tickers())
+    tickers.update(MEGA_CAPS)
+    return tickers
+
+
+def _build_exclude_sets(conn) -> tuple[set[str], set[str]]:
+    """Return (active_in_discovery, recently_failed) sets for fast gate checks."""
+    cutoff = (date.today() - timedelta(days=_FAILED_REELIGIBLE_DAYS)).isoformat()
+
+    recently_failed = {
+        r[0]
+        for r in conn.execute(
+            "SELECT ticker FROM discovery_candidates WHERE status = 'FAILED' AND discovered_date >= ?",
+            [cutoff],
+        ).fetchall()
+    }
+    active_in_discovery = {
+        r[0]
+        for r in conn.execute(
+            "SELECT ticker FROM discovery_candidates WHERE status != 'FAILED'",
+        ).fetchall()
+    }
+    return active_in_discovery, recently_failed
+
+
+def _passes_quality_gate(
+    ticker: str,
+    parent: str,
+    conn,
+    massive_key: str,
     in_graph: set[str],
     active_in_discovery: set[str],
     recently_failed: set[str],
 ) -> tuple[bool, str]:
-    """Return (passes, skip_reason). skip_reason is empty string on pass."""
+    """Return (passes, skip_reason). skip_reason is empty on pass."""
+    if parent not in KNOWN_PARENTS:
+        return False, f"parent {parent} not in KNOWN_PARENTS"
     if ticker in in_graph:
         return False, "already active"
     if ticker in active_in_discovery:
@@ -411,7 +724,6 @@ def _check_quality_gates(
             return False, f"price ${latest_close:.2f} below ${_MIN_PRICE}"
         if avg_dv < _MIN_ADV:
             return False, f"ADV ${avg_dv:,.0f} below ${_MIN_ADV:,.0f}"
-        # Listing age from oldest price date in DB (proxy)
         try:
             oldest = date.fromisoformat(oldest_date)
             days_listed = (date.today() - oldest).days
@@ -420,8 +732,7 @@ def _check_quality_gates(
         except ValueError:
             pass
     else:
-        # Not in prices table — fetch from Massive
-        massive_result = _price_adv_from_massive(ticker, api_key)
+        massive_result = _price_adv_from_massive(ticker, massive_key)
         if massive_result is None:
             return False, "no price data available"
         latest_close, avg_dv = massive_result
@@ -429,8 +740,7 @@ def _check_quality_gates(
             return False, f"price ${latest_close:.2f} below ${_MIN_PRICE}"
         if avg_dv < _MIN_ADV:
             return False, f"ADV ${avg_dv:,.0f} below ${_MIN_ADV:,.0f}"
-        # Listing date from Massive detail endpoint
-        list_date_str = _list_date_from_massive(ticker, api_key)
+        list_date_str = _list_date_from_massive(ticker, massive_key)
         if list_date_str:
             try:
                 list_dt = date.fromisoformat(list_date_str)
@@ -443,16 +753,39 @@ def _check_quality_gates(
     return True, ""
 
 
+# ---------- dependency_graph sync -----------------------------------------------
+
+def sync_dependency_graph(conn) -> None:
+    """Upsert all static edges from dependencies.yaml into dependency_graph table."""
+    try:
+        with open(_DEPS_YAML_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        edges = data.get("edges", [])
+        rows = [
+            (e["child"], e["parent"], "static_yaml", date.today().isoformat(),
+             None, None, None, "ACTIVE")
+            for e in edges
+            if e.get("child") and e.get("parent")
+        ]
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO dependency_graph
+                (ticker, parent, source, validated_date, ic_h1, ic_h2, ic_full, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        logger.info("dependency_graph: synced %d static edges from dependencies.yaml", len(rows))
+    except Exception as exc:
+        logger.error("dependency_graph sync failed: %s", exc)
+
+
 # ---------- discover() main ------------------------------------------------------
 
 def discover(conn=None) -> int:
-    """Read each known parent's 10-K, extract supplier/partner mentions, match to
-    tickers, apply quality gates, insert passing candidates as ACCUMULATING, then
-    immediately backfill RS history. Returns count of new insertions.
+    """ETF universe → candidate 10-K concentration → quality gate → insert ACCUMULATING.
 
-    Gates applied per candidate ticker:
-      1. Not a known parent (MEGA_CAPS)
-      2. Quality: price >= $5, ADV >= $10M, listed >= 180 days, not in graph/discovery
+    Returns count of new insertions.
     """
     _own_conn = conn is None
     if _own_conn:
@@ -464,39 +797,35 @@ def discover(conn=None) -> int:
             logger.error("MASSIVE_API_KEY not set — discovery cannot run")
             return 0
 
-        logger.info("Discovery: reading 10-K for %d parents...", len(MEGA_CAPS))
+        logger.info("Running discovery pipeline...")
 
         sync_dependency_graph(conn)
+
+        candidates = _get_etf_universe(api_key, conn)
+        logger.info("Universe: %d candidates", len(candidates))
+
         in_graph = _already_in_graph()
         active_in_discovery, recently_failed = _build_exclude_sets(conn)
 
-        inserted = 0
-        newly_inserted: list[tuple[str, str]] = []
+        new_pairs: list[tuple[str, str, float, str]] = []
 
-        for parent in MEGA_CAPS:
-            text = _fetch_parent_10k_text(parent, api_key)
-            if not text:
-                logger.warning("%s: no 10-K sections available — skipping", parent)
+        for ticker in candidates:
+            try:
+                results = _extract_concentration(ticker, api_key, conn)
+            except Exception as exc:
+                logger.error("%s: extraction failed: %s — skipping", ticker, exc)
                 continue
-            logger.info("%s 10-K: business + risk_factors fetched (%d chars)", parent, len(text))
 
-            candidate_tickers = _extract_tickers_from_10k(text, parent)
-
-            for ticker in candidate_tickers:
-                # Gate 1: skip known parents
-                if ticker in _VALID_PARENTS:
-                    logger.info("  SKIP: %s — is a known parent", ticker)
-                    continue
-
-                # Gate 2: quality (price, ADV, listing age, graph/discovery membership)
-                passes, reason = _check_quality_gates(
-                    ticker, conn, api_key,
+            for parent, pct, resolved_by in results:
+                passes, reason = _passes_quality_gate(
+                    ticker, parent, conn, api_key,
                     in_graph, active_in_discovery, recently_failed,
                 )
                 if not passes:
-                    logger.info("  SKIP: %s — %s", ticker, reason)
+                    logger.info("  → SKIP: %s — %s", ticker, reason)
                     continue
 
+                strength = "STRONG" if pct >= 20.0 else "MEDIUM"
                 try:
                     conn.execute(
                         """
@@ -504,26 +833,28 @@ def discover(conn=None) -> int:
                             (ticker, parent, dependency_strength, claude_confidence,
                              revenue_pct, evidence, source_accession,
                              discovered_date, status)
-                        VALUES (?, ?, NULL, NULL, NULL, NULL,
+                        VALUES (?, ?, ?, NULL, ?, NULL,
                                 ?, CURRENT_DATE, 'ACCUMULATING')
                         """,
-                        [ticker, parent, f"parent_10k_{parent}"],
+                        [ticker, parent, strength, pct, f"etf_10k_{resolved_by}"],
                     )
                     active_in_discovery.add(ticker)
-                    newly_inserted.append((ticker, parent))
-                    inserted += 1
-                    logger.info("  NEW: %s → %s (via %s 10-K)", ticker, parent, parent)
+                    new_pairs.append((ticker, parent, pct, resolved_by))
+                    logger.info(
+                        "NEW: %s → %s (%s, %.0f%% revenue)",
+                        ticker, parent, resolved_by, pct,
+                    )
                 except Exception as exc:
-                    logger.error("  %s → %s: insert failed: %s", ticker, parent, exc)
+                    logger.error("%s → %s: insert failed: %s", ticker, parent, exc)
 
-        logger.info("Discovery complete: %d new candidates inserted", inserted)
+        logger.info("Discovery complete: %d new candidates", len(new_pairs))
 
-        if newly_inserted:
-            logger.info("Backfilling RS for %d new candidates...", len(newly_inserted))
-            _backfill_rs_pairs(newly_inserted, conn)
+        if new_pairs:
+            logger.info("Backfilling RS for %d new candidates...", len(new_pairs))
+            _backfill_rs_pairs([(t, p) for t, p, _, _ in new_pairs], conn)
             _advance_accumulating_status(conn)
 
-        return inserted
+        return len(new_pairs)
 
     finally:
         if _own_conn:
@@ -563,13 +894,7 @@ def _compute_rs_series(
     parent_prices: dict[str, float],
     already_accumulated: set[str],
 ) -> list[tuple[str, float]]:
-    """Return [(date, rs_score)] for all dates not yet accumulated.
-
-    Loads both price series into memory and computes the rolling 20-day return
-    differential in a single pass — avoids per-date DB queries during backfill.
-    Only dates where both ticker and parent have at least _RS_LOOKBACK+1 bars
-    of history up to that point are included.
-    """
+    """Return [(date, rs_score)] for all dates not yet accumulated."""
     child_dates = sorted(child_prices)
     parent_dates_set = set(parent_prices)
 
@@ -581,12 +906,10 @@ def _compute_rs_series(
         if d not in parent_dates_set:
             continue
 
-        # Need _RS_LOOKBACK+1 bars up to and including d for both tickers
         child_window = child_dates[max(0, i - _RS_LOOKBACK): i + 1]
         if len(child_window) < _RS_LOOKBACK + 1:
             continue
 
-        # Build parent window: last _RS_LOOKBACK+1 parent dates <= d
         parent_window = sorted(dt for dt in parent_dates_set if dt <= d)
         if len(parent_window) < _RS_LOOKBACK + 1:
             continue
@@ -610,9 +933,7 @@ def _compute_rs_series(
 def _backfill_rs_pairs(pairs: list[tuple[str, str]], conn) -> int:
     """Backfill RS scores for the given (ticker, parent) pairs.
 
-    Loads full price series into memory, computes the 20-day rolling return
-    differential for all dates not yet accumulated, bulk-inserts via executemany.
-    Returns total rows inserted. Does NOT update status — caller is responsible.
+    Returns total rows inserted.
     """
     if not pairs:
         return 0
@@ -656,10 +977,6 @@ def _backfill_rs_pairs(pairs: list[tuple[str, str]], conn) -> int:
 def accumulate_rs(conn=None) -> int:
     """Backfill and extend RS scores for all ACCUMULATING candidates.
 
-    For each (ticker, parent) pair fetches full price history for both
-    into memory, computes the 20-day rolling return differential for every
-    date not yet in rs_accumulation, and bulk-inserts the results. On first
-    run after price backfill this inserts up to ~500 rows per candidate.
     Returns total rows inserted.
     """
     _own_conn = conn is None
@@ -728,7 +1045,6 @@ def _run_ic_backtest(ticker: str, parent: str, conn) -> dict:
     dates = [r[0] for r in rows]
     scores = [r[1] for r in rows]
 
-    # Compute forward 5-day return from prices for each rs_accumulation date
     pairs: list[tuple[float, float]] = []
     for d, score in zip(dates, scores):
         fwd_rows = conn.execute(
@@ -782,7 +1098,10 @@ def _append_to_dependencies_yaml(ticker: str, parent: str, evidence: str) -> Non
         "child": ticker,
         "type": "systems",
         "weight": 0.3,
-        "notes": f"Auto-promoted via discovery pipeline: {evidence[:80]}" if evidence else "Auto-promoted via discovery pipeline",
+        "notes": (
+            f"Auto-promoted via discovery pipeline: {evidence[:80]}"
+            if evidence else "Auto-promoted via discovery pipeline"
+        ),
     }
     data["edges"].append(new_edge)
 
