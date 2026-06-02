@@ -9,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -2373,3 +2373,26 @@ async def api_update_filing_impact(filing_id: int, body: _FilingImpactUpdate):
     except Exception as exc:
         logger.error("api_update_filing_impact failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Admin: force-full ingest (one-time migration tool)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/admin/force-full-ingest")
+async def api_admin_force_full_ingest(x_admin_token: str | None = Header(default=None)):
+    expected = os.environ.get("ADMIN_TOKEN")
+    if not expected or x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    def _run():
+        from scanner.ingest.prices import ingest_all
+        logger.info("force-full-ingest: starting background ingest (force_full=True)")
+        try:
+            ingest_all(force_full=True)
+            logger.info("force-full-ingest: completed")
+        except Exception as exc:
+            logger.error("force-full-ingest: failed: %s", exc)
+
+    asyncio.create_task(asyncio.to_thread(_run))
+    return {"status": "started"}

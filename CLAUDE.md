@@ -327,6 +327,17 @@ pytest --cov=scanner              # with coverage
 - `GET /api/admin/generate-summaries`
 - `GET /api/admin/test-anthropic`
 - `GET /api/debug`
+- `POST /api/admin/force-full-ingest` — triggers `ingest_all(force_full=True)` in a
+  background thread; requires `X-Admin-Token` header matching `ADMIN_TOKEN` env var.
+  Returns `{"status": "started"}` immediately; check server logs for completion.
+
+```bash
+curl -X POST https://web-production-a4cbb.up.railway.app/api/admin/force-full-ingest \
+  -H "X-Admin-Token: {ADMIN_TOKEN}"
+```
+
+Set `ADMIN_TOKEN` in Railway Variables tab (any random string). Returns 401 if token
+is missing or wrong.
 
 ## RESEARCH FINDINGS
 
