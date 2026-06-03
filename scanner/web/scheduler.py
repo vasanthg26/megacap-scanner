@@ -1,10 +1,29 @@
 """APScheduler jobs: daily price ingest, estimates ingest, weekly insider ingest."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def is_market_open_today() -> bool:
+    """Return True only if today is a US market trading day (NYSE calendar).
+
+    Falls back to weekday check if pandas_market_calendars is unavailable.
+    """
+    today = date.today()
+    try:
+        import pandas_market_calendars as mcal
+        nyse = mcal.get_calendar("NYSE")
+        schedule = nyse.schedule(
+            start_date=today.isoformat(),
+            end_date=today.isoformat(),
+        )
+        return not schedule.empty
+    except Exception as exc:
+        logger.warning("pandas_market_calendars unavailable — falling back to weekday check: %s", exc)
+        return today.weekday() < 5  # Mon-Fri
 
 # Mutable status dict — updated by each job run, read by /api/status endpoint.
 scheduler_status: dict[str, Any] = {
@@ -164,6 +183,13 @@ def get_scheduler_info() -> dict:
 def _job_ingest() -> None:
     from scanner.ingest.prices import ingest_all
 
+    if not is_market_open_today():
+        logger.info("Price ingest: market closed today — skipping")
+        scheduler_status["last_ingest_ok"] = True
+        scheduler_status["last_ingest"] = datetime.utcnow().isoformat()
+        _write_activity_log("ingest", "success", "market closed — skipped")
+        return
+
     logger.info("Scheduled job: price ingest starting")
     try:
         results = ingest_all(None)
@@ -190,6 +216,13 @@ def _job_ingest() -> None:
 
 def _job_estimates() -> None:
     from scanner.ingest.estimates import ingest_estimates
+
+    if not is_market_open_today():
+        logger.info("Estimates ingest: market closed today — skipping")
+        scheduler_status["last_estimates_ok"] = True
+        scheduler_status["last_estimates"] = datetime.utcnow().isoformat()
+        _write_activity_log("ingest-estimates", "success", "market closed — skipped")
+        return
 
     logger.info("Scheduled job: estimates ingest starting")
     try:
@@ -314,6 +347,13 @@ def _job_cleanup_filings() -> None:
 def _job_filings() -> None:
     from scanner.ingest.filings import ingest_filings
 
+    if not is_market_open_today():
+        logger.info("8-K filings ingest: market closed today — skipping")
+        scheduler_status["last_filings_ok"] = True
+        scheduler_status["last_filings"] = datetime.utcnow().isoformat()
+        _write_activity_log("ingest-filings", "success", "market closed — skipped")
+        return
+
     logger.info("Scheduled job: 8-K filings ingest starting")
     try:
         results = ingest_filings(None, days_back=7)
@@ -335,6 +375,13 @@ def _job_filings() -> None:
 def _job_short_interest() -> None:
     from scanner.ingest.short_interest import ingest_short_interest
 
+    if not is_market_open_today():
+        logger.info("Short interest ingest: market closed today — skipping")
+        scheduler_status["last_short_interest_ok"] = True
+        scheduler_status["last_short_interest"] = datetime.utcnow().isoformat()
+        _write_activity_log("ingest-short", "success", "market closed — skipped")
+        return
+
     logger.info("Scheduled job: short interest ingest starting")
     try:
         results = ingest_short_interest(None)
@@ -355,6 +402,13 @@ def _job_short_interest() -> None:
 
 def _job_journal_capture() -> None:
     from scanner.web.app import _capture_journal_sync
+
+    if not is_market_open_today():
+        logger.info("Journal capture: market closed today — skipping")
+        scheduler_status["last_journal_capture_ok"] = True
+        scheduler_status["last_journal_capture"] = datetime.utcnow().isoformat()
+        _write_activity_log("journal-capture", "success", "market closed — skipped")
+        return
 
     logger.info("Scheduled job: journal capture starting")
     try:
@@ -379,6 +433,13 @@ def _job_journal_capture() -> None:
 def _job_scan() -> None:
     from scanner.db import get_connection
     from scanner.web.app import _run_scan_today_sync
+
+    if not is_market_open_today():
+        logger.info("Scan: market closed today — skipping")
+        scheduler_status["last_scan_ok"] = True
+        scheduler_status["last_scan"] = datetime.utcnow().isoformat()
+        _write_activity_log("run-scan", "success", "market closed — skipped")
+        return
 
     logger.info("Scheduled job: scan computation starting")
     try:
@@ -409,6 +470,13 @@ def _job_scan() -> None:
 def _job_scan_themes() -> None:
     from scanner.db import get_connection
     from scanner.signals.theme_scanner import compute_theme_scan
+
+    if not is_market_open_today():
+        logger.info("Theme scan: market closed today — skipping")
+        scheduler_status["last_theme_scan_ok"] = True
+        scheduler_status["last_theme_scan"] = datetime.utcnow().isoformat()
+        _write_activity_log("scan-themes", "success", "market closed — skipped")
+        return
 
     logger.info("Scheduled job: theme basket scan starting")
     try:
@@ -463,6 +531,13 @@ def _job_discovery() -> None:
 def _job_accumulate_rs() -> None:
     from scanner.ingest.discovery import accumulate_rs
 
+    if not is_market_open_today():
+        logger.info("RS accumulation: market closed today — skipping")
+        scheduler_status["last_accumulate_rs_ok"] = True
+        scheduler_status["last_accumulate_rs"] = datetime.utcnow().isoformat()
+        _write_activity_log("accumulate-rs", "success", "market closed — skipped")
+        return
+
     logger.info("Scheduled job: RS accumulation starting")
     _status = "error"
     _message = ""
@@ -489,25 +564,25 @@ def create_scheduler():
 
     scheduler = AsyncIOScheduler(timezone="America/New_York")
 
-    # Daily 9:00 AM ET — price ingest
+    # Daily 5:00 PM ET — price ingest (after market close; market guard applied)
     scheduler.add_job(
         _job_ingest,
-        CronTrigger(hour=9, minute=0, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=0, timezone="America/New_York"),
         id="ingest_prices",
         name="Daily price ingest",
         replace_existing=True,
     )
 
-    # Daily 9:05 AM ET — estimates ingest
+    # Daily 5:05 PM ET — estimates ingest (market guard applied)
     scheduler.add_job(
         _job_estimates,
-        CronTrigger(hour=9, minute=5, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=5, timezone="America/New_York"),
         id="ingest_estimates",
         name="Daily estimates ingest",
         replace_existing=True,
     )
 
-    # Weekly Monday 9:10 AM ET — insider ingest
+    # Weekly Monday 9:10 AM ET — insider ingest (no market guard; not price-dependent)
     scheduler.add_job(
         _job_insiders,
         CronTrigger(day_of_week="mon", hour=9, minute=10, timezone="America/New_York"),
@@ -516,7 +591,7 @@ def create_scheduler():
         replace_existing=True,
     )
 
-    # Daily 9:15 AM ET — earnings dates ingest
+    # Daily 9:15 AM ET — earnings dates ingest (no market guard; dates don't change on holidays)
     scheduler.add_job(
         _job_earnings,
         CronTrigger(hour=9, minute=15, timezone="America/New_York"),
@@ -525,25 +600,25 @@ def create_scheduler():
         replace_existing=True,
     )
 
-    # Daily 9:20 AM ET — 8-K filings ingest
+    # Daily 5:07 PM ET — 8-K filings ingest (market guard applied)
     scheduler.add_job(
         _job_filings,
-        CronTrigger(hour=9, minute=20, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=7, timezone="America/New_York"),
         id="ingest_filings",
         name="Daily 8-K filings ingest",
         replace_existing=True,
     )
 
-    # Daily 9:22 AM ET — short interest ingest
+    # Daily 5:09 PM ET — short interest ingest (market guard applied)
     scheduler.add_job(
         _job_short_interest,
-        CronTrigger(hour=9, minute=22, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=9, timezone="America/New_York"),
         id="ingest_short",
         name="Daily short interest ingest",
         replace_existing=True,
     )
 
-    # Weekly Monday 9:25 AM ET — filings retention cleanup
+    # Weekly Monday 9:25 AM ET — filings retention cleanup (no market guard)
     scheduler.add_job(
         _job_cleanup_filings,
         CronTrigger(day_of_week="mon", hour=9, minute=25, timezone="America/New_York"),
@@ -552,43 +627,43 @@ def create_scheduler():
         replace_existing=True,
     )
 
-    # Daily 9:30 AM ET — scan computation (after all ingestion is complete)
+    # Daily 5:10 PM ET — scan computation (after price ingest; market guard applied)
     scheduler.add_job(
         _job_scan,
-        CronTrigger(hour=9, minute=30, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=10, timezone="America/New_York"),
         id="run_scan",
         name="run-scan",
         replace_existing=True,
     )
 
-    # Daily 9:35 AM ET — journal capture (after scan completes)
+    # Daily 5:12 PM ET — journal capture (after scan completes; market guard applied)
     scheduler.add_job(
         _job_journal_capture,
-        CronTrigger(hour=9, minute=35, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=12, timezone="America/New_York"),
         id="journal_capture",
         name="journal-capture",
         replace_existing=True,
     )
 
-    # Daily 9:40 AM ET — theme basket scan (after journal capture)
+    # Daily 5:15 PM ET — theme basket scan (after journal capture; market guard applied)
     scheduler.add_job(
         _job_scan_themes,
-        CronTrigger(hour=9, minute=40, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=15, timezone="America/New_York"),
         id="scan_themes",
         name="scan-themes",
         replace_existing=True,
     )
 
-    # Daily 9:45 AM ET — RS accumulation for discovery candidates
+    # Daily 5:20 PM ET — RS accumulation for discovery candidates (market guard applied)
     scheduler.add_job(
         _job_accumulate_rs,
-        CronTrigger(hour=9, minute=45, timezone="America/New_York"),
+        CronTrigger(hour=17, minute=20, timezone="America/New_York"),
         id="accumulate_rs",
         name="accumulate-rs",
         replace_existing=True,
     )
 
-    # Weekly Sunday 6:00 AM ET — discovery pipeline (10-K analysis via Claude)
+    # Weekly Sunday 6:00 AM ET — discovery pipeline (10-K analysis via Claude; no market guard)
     scheduler.add_job(
         _job_discovery,
         CronTrigger(day_of_week="sun", hour=6, minute=0, timezone="America/New_York"),

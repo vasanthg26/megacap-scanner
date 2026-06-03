@@ -293,6 +293,21 @@ pytest --cov=scanner              # with coverage
 - `scanner.graph.loader._load_edges` is `@lru_cache` — use `_load_edges.cache_clear()` if a
   test modifies the YAML (prefer not to; test with the real YAML).
 
+## Scheduler Timing
+
+Price-dependent jobs run at 5:00 PM ET after market close — signals reflect
+same-day closing prices.
+
+Market calendar guard (`is_market_open_today()`) applied to all price-dependent
+jobs. Uses `pandas_market_calendars` NYSE calendar; falls back to weekday check
+if library unavailable. No API calls on weekends or US market holidays.
+
+Jobs with market guard (5 PM ET): ingest, ingest-estimates, ingest-filings,
+ingest-short, run-scan, journal-capture, scan-themes, accumulate-rs.
+
+Jobs without guard (morning, unchanged): ingest-insiders (Mon 9:10 AM),
+ingest-earnings (9:15 AM), cleanup-filings (Mon 9:25 AM), discover (Sun 6 AM).
+
 ## Railway Deployment Notes
 
 ### DATABASE_PATH
