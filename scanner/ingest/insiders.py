@@ -40,6 +40,22 @@ from scanner.db import get_connection
 
 logger = logging.getLogger(__name__)
 
+
+def _redact_key(exc) -> str:
+    """Replace apiKey value in exception/URL strings before logging."""
+    s = str(exc)
+    if "apiKey=" not in s:
+        return s
+    parts = s.split("apiKey=")
+    result = parts[0] + "apiKey=***"
+    for part in parts[1:]:
+        for delim in ("&", " ", '"', "'", ")"):
+            idx = part.find(delim)
+            if idx != -1:
+                result += part[idx:]
+                break
+    return result
+
 _EDGAR_RATE_SLEEP = 0.15   # EDGAR: ≤10 req/s; using 0.15 for margin
 _MASSIVE_RATE_SLEEP = 6.0  # Massive starter: ≤10 req/min
 
@@ -188,7 +204,7 @@ def _list_form4_massive(
             resp = requests.get(url, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as exc:
-            logger.error("Massive Form 4 fetch failed for CIK %s: %s", issuer_cik, exc)
+            logger.error("Massive Form 4 fetch failed for CIK %s: %s", issuer_cik, _redact_key(exc))
             break
 
         data = resp.json()
@@ -623,7 +639,7 @@ def _ingest_edgar_only(
                 cik, accession, document, edgar_session
             )
         except requests.HTTPError as exc:
-            logger.error("%s: fetch failed for %s: %s", ticker, accession, exc)
+            logger.error("%s: fetch failed for %s: %s", ticker, accession, _redact_key(exc))
             continue
 
         transactions, review_items = parse_form4_xml(

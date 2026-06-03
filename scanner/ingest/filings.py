@@ -53,6 +53,26 @@ _DOLLAR_PATTERN = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)\s*(billion|million|B|M)\b
 _IMPACT_RANK = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
 _IMPACT_FROM_RANK = {2: "HIGH", 1: "MEDIUM", 0: "LOW"}
 
+# Foreign private issuers file 20-F (not 8-K) with SEC — Massive 8-K endpoint
+# returns 404 for these tickers by design.
+FOREIGN_FILERS: frozenset[str] = frozenset(["TSM", "ASML", "STM", "SAP"])
+
+
+def _redact_key(exc) -> str:
+    """Replace apiKey value in exception/URL strings before logging."""
+    s = str(exc)
+    if "apiKey=" not in s:
+        return s
+    parts = s.split("apiKey=")
+    result = parts[0] + "apiKey=***"
+    for part in parts[1:]:
+        for delim in ("&", " ", '"', "'", ")"):
+            idx = part.find(delim)
+            if idx != -1:
+                result += part[idx:]
+                break
+    return result
+
 
 def _get_massive_key() -> str | None:
     key = os.environ.get("MASSIVE_API_KEY", "").strip()
@@ -293,6 +313,10 @@ def _extract_material_items(items_raw) -> list[str]:
 
 def _fetch_filings_massive(ticker: str, cutoff: date, api_key: str) -> list[dict]:
     """Fetch 8-K and S-3 filings for a single ticker via Massive API since `cutoff`."""
+    if ticker in FOREIGN_FILERS:
+        logger.info("%s: foreign filer (20-F) — skipping 8-K/S-3 fetch", ticker)
+        return []
+
     results = []
 
     # 8-K filings — text included directly in response
@@ -337,8 +361,13 @@ def _fetch_filings_massive(ticker: str, cutoff: date, api_key: str) -> list[dict
                 "impact_source": "auto",
                 "filing_text": filing_text or None,
             })
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            logger.debug("%s: Massive 8-K endpoint 404 — no filings available on this plan/ticker", ticker)
+        else:
+            logger.warning("%s: Massive 8-K fetch failed: %s", ticker, _redact_key(exc))
     except Exception as exc:
-        logger.warning("%s: Massive 8-K fetch failed: %s", ticker, exc)
+        logger.warning("%s: Massive 8-K fetch failed: %s", ticker, _redact_key(exc))
 
     # S-3 shelf registrations — fetched separately from the filings index
     try:
@@ -379,8 +408,13 @@ def _fetch_filings_massive(ticker: str, cutoff: date, api_key: str) -> list[dict
                 "impact_explanation": None,
                 "filing_text": None,
             })
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            logger.debug("%s: Massive S-3 endpoint 404 — no filings available on this plan/ticker", ticker)
+        else:
+            logger.warning("%s: Massive S-3 fetch failed: %s", ticker, _redact_key(exc))
     except Exception as exc:
-        logger.warning("%s: Massive S-3 fetch failed: %s", ticker, exc)
+        logger.warning("%s: Massive S-3 fetch failed: %s", ticker, _redact_key(exc))
 
     return results
 
@@ -484,7 +518,7 @@ def ingest_filings(
                 logger.info("%-6s  %d filings written (since %s)", ticker, written, cutoff)
                 results[ticker] = "ok"
             except Exception as exc:
-                logger.error("%-6s  filings ingest error: %s", ticker, exc)
+                logger.error("%-6s  filings ingest error: %s", ticker, _redact_key(exc))
                 results[ticker] = "error"
 
         cleanup_filings(conn)

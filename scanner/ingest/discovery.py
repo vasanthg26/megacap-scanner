@@ -47,6 +47,22 @@ from scanner.graph.loader import get_all_tickers, MEGA_CAPS, _load_edges
 
 logger = logging.getLogger(__name__)
 
+
+def _redact_key(exc) -> str:
+    """Replace apiKey value in exception/URL strings before logging."""
+    s = str(exc)
+    if "apiKey=" not in s:
+        return s
+    parts = s.split("apiKey=")
+    result = parts[0] + "apiKey=***"
+    for part in parts[1:]:
+        for delim in ("&", " ", '"', "'", ")"):
+            idx = part.find(delim)
+            if idx != -1:
+                result += part[idx:]
+                break
+    return result
+
 _MASSIVE_BASE = "https://api.massive.com"
 _MASSIVE_RATE_SLEEP = 6.0   # 10 req/min starter plan
 
@@ -244,7 +260,7 @@ def _get_etf_universe(massive_key: str, conn) -> list[str]:
                         if h.get("ticker") or h.get("symbol")
                     ]
         except Exception as exc:
-            logger.warning("ETF %s: holdings fetch failed: %s — using fallback", etf, exc)
+            logger.warning("ETF %s: holdings fetch failed: %s — using fallback", etf, _redact_key(exc))
 
         if not constituents:
             constituents = ETF_FALLBACK_UNIVERSE.get(etf, [])
@@ -346,7 +362,7 @@ def _price_adv_from_massive(ticker: str, api_key: str) -> Optional[tuple[float, 
         avg_dv = sum(dollar_vols) / len(dollar_vols) if dollar_vols else 0.0
         return float(latest_close), avg_dv
     except Exception as exc:
-        logger.warning("%s: Massive aggs fetch failed: %s", ticker, exc)
+        logger.warning("%s: Massive aggs fetch failed: %s", ticker, _redact_key(exc))
         return None
 
 
@@ -361,7 +377,7 @@ def _list_date_from_massive(ticker: str, api_key: str) -> Optional[str]:
         result = data.get("results", {})
         return result.get("list_date")
     except Exception as exc:
-        logger.warning("%s: Massive ticker detail fetch failed: %s", ticker, exc)
+        logger.warning("%s: Massive ticker detail fetch failed: %s", ticker, _redact_key(exc))
         return None
 
 
@@ -430,7 +446,7 @@ def _extract_concentration(
             else:
                 logger.debug("%s: 10-K section '%s' empty or too short — skipping", ticker, section)
         except Exception as exc:
-            logger.warning("%s: 10-K section '%s' fetch failed: %s", ticker, section, exc)
+            logger.warning("%s: 10-K section '%s' fetch failed: %s", ticker, section, _redact_key(exc))
             time.sleep(_MASSIVE_RATE_SLEEP)
 
     if not sections:

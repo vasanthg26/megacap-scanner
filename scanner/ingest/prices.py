@@ -20,6 +20,22 @@ from scanner.graph.loader import get_all_tickers
 
 logger = logging.getLogger(__name__)
 
+
+def _redact_key(exc) -> str:
+    """Replace apiKey value in exception/URL strings before logging."""
+    s = str(exc)
+    if "apiKey=" not in s:
+        return s
+    parts = s.split("apiKey=")
+    result = parts[0] + "apiKey=***"
+    for part in parts[1:]:
+        for delim in ("&", " ", '"', "'", ")"):
+            idx = part.find(delim)
+            if idx != -1:
+                result += part[idx:]
+                break
+    return result
+
 _LOOKBACK_DAYS = 730  # 2 years
 _INCREMENTAL_DAYS = 30
 _RATE_SLEEP = 6.0  # Massive starter plan: ≤10 req/min
@@ -79,7 +95,7 @@ def _fetch_ohlcv_massive(ticker: str, from_date: str, to_date: str, api_key: str
             })
         return pd.DataFrame(rows)
     except Exception as exc:
-        logger.error("Massive fetch failed for %s: %s", ticker, exc)
+        logger.error("Massive fetch failed for %s: %s", ticker, _redact_key(exc))
         return pd.DataFrame()
 
 
@@ -206,7 +222,7 @@ def ingest_all(tickers: list[str] | None = None, force_full: bool = False) -> di
                 rows = 0
                 status = "error"
                 error_msg = str(exc)
-                logger.error("%-6s  error: %s", ticker, exc)
+                logger.error("%-6s  error: %s", ticker, _redact_key(exc))
 
             conn.execute("""
                 INSERT OR REPLACE INTO ingest_log (ticker, fetched_at, rows_written, status, error_msg)

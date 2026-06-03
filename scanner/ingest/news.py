@@ -13,6 +13,22 @@ from scanner.graph.loader import get_all_tickers
 
 logger = logging.getLogger(__name__)
 
+
+def _redact_key(exc) -> str:
+    """Replace apiKey value in exception/URL strings before logging."""
+    s = str(exc)
+    if "apiKey=" not in s:
+        return s
+    parts = s.split("apiKey=")
+    result = parts[0] + "apiKey=***"
+    for part in parts[1:]:
+        for delim in ("&", " ", '"', "'", ")"):
+            idx = part.find(delim)
+            if idx != -1:
+                result += part[idx:]
+                break
+    return result
+
 _MASSIVE_BASE = "https://api.massive.com"
 _RATE_SLEEP = 1.0
 _SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "settings.yaml"
@@ -90,7 +106,7 @@ def ingest_news(tickers: list[str] | None = None) -> dict[str, str]:
                 logger.info("%-6s  news: %d articles", ticker, rows_written)
 
             except Exception as exc:
-                logger.error("%-6s  news ingest error: %s", ticker, exc)
+                logger.error("%-6s  news ingest error: %s", ticker, _redact_key(exc))
                 results[ticker] = "error"
 
     return results
