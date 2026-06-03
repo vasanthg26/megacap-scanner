@@ -436,3 +436,16 @@ Basket   +0.088  +0.188  +0.168      +0.203       +0.131
 `calc_basket_zscore` in `signals/base.py` is extended with a `_DEVPLATFORM_BASKET`
 constant and the tickers are added to `_ZSCORE_ACTION_TICKERS` in `signals/theme_scanner.py`.
 **Do not add to `VALIDATED_THEMES` — that path fires RS labels, which have insufficient evidence.**
+
+### Blume Beta Z-Score Research (2026-06-02)
+
+Tested Z_RS x RVOL x Z_beta and Z_RS x RVOL x Z_blume on all theme baskets.
+Script: `scanner/research/blume_zscore_beta_test.py`
+
+Both variants degraded IC on the two real baskets (AI Power, Developer Platforms).
+Blume adjustment produced identical results to raw beta at n=4-5 basket size
+(Blume shrinkage only differentiates meaningfully when basket std is large, which
+requires many more tickers).
+
+Decision: keep Z_RS x RVOL as the production signal.
+Revisit if theme baskets expand to n>20 tickers.
