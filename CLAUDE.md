@@ -400,3 +400,39 @@ Based on beta-adjusted regime-conditional IC analysis:
 Removed from:
 - `config/dependencies.yaml` (TSLA→ON edge deleted)
 - `scanner/ingest/discovery.py` ETF_FALLBACK_UNIVERSE (SOXX and DRIV lists)
+
+### Developer Platforms & Edge Compute Theme Basket (2026-06-02)
+
+Tickers: DOCN, NET, AKAM, DDOG
+Benchmark: WCLD (2+ years history confirmed — IGV fallback not needed)
+Signal: Cross-sectional Z-score × RVOL
+Added: 2026-06-02
+Rationale: Developer-first cloud stack, no mega-cap parent dependency found
+via 10-K concentration check. Peer group constructed from 10-K competition
+section disclosures.
+
+**Backtest results (20d forward returns, n=461/ticker, H1/H2 split at 2025-06-17):**
+
+```
+Ticker   IC(RS)  IC(Z)   IC(Z×RVOL)  H1(Z×RVOL)  H2(Z×RVOL)
+DOCN     +0.214  +0.250  +0.172      -0.113       -0.028
+NET      +0.048  +0.212  +0.169      +0.203       -0.049
+AKAM     -0.133  +0.019  +0.008      +0.057       -0.029
+DDOG     +0.083  +0.189  +0.222      +0.343       +0.097
+─────────────────────────────────────────────────────────
+Basket   +0.088  +0.188  +0.168      +0.203       +0.131
+```
+
+**Decision: basket PASSES Z×RVOL criterion** (H1 +0.203 > 0.05, H2 +0.131 > 0.05).
+
+**Caveats:**
+- AKAM near-zero IC on both signals — drag on basket; consider excluding in future review
+- DOCN and NET have negative per-ticker H2 on Z×RVOL; basket H2 held up by DDOG
+- RS signal has negative H1 for 3/4 tickers — do NOT route through `VALIDATED_THEMES`
+  (that path fires RS-based labels; RS evidence is insufficient here)
+- 2-year price history only (Massive API limit); survivorship-bias caveat applies
+
+**Status: VALIDATED (Z×RVOL evidence)** — but action labels remain WATCH until
+`calc_basket_zscore` in `signals/base.py` is extended with a `_DEVPLATFORM_BASKET`
+constant and the tickers are added to `_ZSCORE_ACTION_TICKERS` in `signals/theme_scanner.py`.
+**Do not add to `VALIDATED_THEMES` — that path fires RS labels, which have insufficient evidence.**

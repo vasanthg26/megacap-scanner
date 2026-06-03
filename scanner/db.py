@@ -316,6 +316,11 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             ("onsite_fuel_cells",           "BE",   "GRID", "On-site Solid-Oxide Fuel Cells"),
             ("national_security_space",     "YSS",  "ITA",  "National Security Space Systems"),
             ("ai_power_semiconductors",     "NVTS", "SMH",  "AI Power Semiconductors"),
+            # Developer Platforms & Edge Compute — WATCH pending IC backtest
+            ("dev_platforms_edge_compute",  "DOCN", "WCLD", "Developer Platforms & Edge Compute"),
+            ("dev_platforms_edge_compute",  "NET",  "WCLD", "Developer Platforms & Edge Compute"),
+            ("dev_platforms_edge_compute",  "AKAM", "WCLD", "Developer Platforms & Edge Compute"),
+            ("dev_platforms_edge_compute",  "DDOG", "WCLD", "Developer Platforms & Edge Compute"),
         ]
         for theme_name, ticker, benchmark_etf, theme_label in _THEME_SEED:
             try:
