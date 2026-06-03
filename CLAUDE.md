@@ -432,10 +432,11 @@ Basket   +0.088  +0.188  +0.168      +0.203       +0.131
   (that path fires RS-based labels; RS evidence is insufficient here)
 - 2-year price history only (Massive API limit); survivorship-bias caveat applies
 
-**Status: VALIDATED (Z×RVOL evidence)** — but action labels remain WATCH until
-`calc_basket_zscore` in `signals/base.py` is extended with a `_DEVPLATFORM_BASKET`
-constant and the tickers are added to `_ZSCORE_ACTION_TICKERS` in `signals/theme_scanner.py`.
-**Do not add to `VALIDATED_THEMES` — that path fires RS labels, which have insufficient evidence.**
+**Status: ACTIVE** — Z-score action labels wired 2026-06-02.
+- `_DEVPLATFORM_BASKET` added to `signals/base.py`; `calc_basket_zscore` auto-dispatches by membership
+- Tickers added to `_ZSCORE_ACTION_TICKERS` in `signals/theme_scanner.py`
+- Z×RVOL IC H1:+0.203 H2:+0.131 (WCLD benchmark, validated 2026-06-02)
+- **Do not add to `VALIDATED_THEMES`** — that path fires RS labels; RS H1 is negative for 3/4 tickers
 
 ### Blume Beta Z-Score Research (2026-06-02)
 

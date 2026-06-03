@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 # BE: post-2024 H2 flips negative — revisit November 2026.
 VALIDATED_THEMES: set[str] = {"HUT", "NOK", "BB"}
 
-# AI Power basket tickers that use Z-score for action labels instead of rs_score.
-_ZSCORE_ACTION_TICKERS: set[str] = {"BE", "FPS", "HUT"}
+# Tickers that use Z-score for action labels instead of rs_score.
+# AI Power basket: BE, FPS, HUT (CEG/VST excluded — insufficient per-ticker evidence)
+# Developer Platforms: validated 2026-06-02, Z×RVOL IC H1:+0.203 H2:+0.131 (WCLD benchmark)
+_ZSCORE_ACTION_TICKERS: set[str] = {"BE", "FPS", "HUT", "DOCN", "NET", "AKAM", "DDOG"}
 
 _RS_THRESHOLDS = [
     (0.15, "STRONG_BUY"),

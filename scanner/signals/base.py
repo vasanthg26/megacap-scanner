@@ -241,6 +241,7 @@ def calc_price_range_pct(
 
 
 _AIPOWER_BASKET: list[str] = ["BE", "FPS", "CEG", "VST", "HUT"]
+_DEVPLATFORM_BASKET: list[str] = ["DOCN", "NET", "AKAM", "DDOG"]
 _AIPOWER_MIN_BASKET = 3
 
 
@@ -250,12 +251,18 @@ def calc_basket_zscore(
     conn: duckdb.DuckDBPyConnection,
     basket: list[str] | None = None,
 ) -> float | None:
-    """Cross-sectional Z-score of ticker's 20d return within its AI Power basket.
+    """Cross-sectional Z-score of ticker's 20d return within its theme basket.
 
-    Returns None if ticker not in basket, insufficient basket data, or std == 0.
+    Auto-selects basket by ticker membership when basket is None.
+    Returns None if ticker not in any known basket, insufficient basket data, or std == 0.
+    Z×RVOL IC validated: AI Power (H1/H2 mixed); Dev Platforms H1:+0.203 H2:+0.131
+    (WCLD benchmark, validated 2026-06-02).
     """
     if basket is None:
-        basket = _AIPOWER_BASKET
+        if ticker in _DEVPLATFORM_BASKET:
+            basket = _DEVPLATFORM_BASKET
+        else:
+            basket = _AIPOWER_BASKET
     if ticker not in basket:
         return None
 
