@@ -505,6 +505,7 @@ def _render_divergence_panel(flags: list[dict], as_of: str) -> None:
         return
 
     _STRENGTH_ICON = {"STRONG": "⚡⚡", "MODERATE": "⚡", "BENCHMARK": "📈", "SECTOR_OUTPERFORM": "🚀"}
+    _STRENGTH_LABEL = {"SECTOR_OUTPERFORM": "OUTPERFORM"}
 
     table = Table(
         title=f"[bold orange1]DIVERGENCE FLAGS — {as_of}[/bold orange1]",
@@ -521,6 +522,7 @@ def _render_divergence_panel(flags: list[dict], as_of: str) -> None:
 
     for f in flags:
         icon = _STRENGTH_ICON.get(f["strength"], "")
+        strength_text = _STRENGTH_LABEL.get(f["strength"], f["strength"])
         label = f["theme"] or f["parent"] or f["benchmark"]
         if label and len(label) > 22:
             label = label[:21] + "…"
@@ -537,7 +539,7 @@ def _render_divergence_panel(flags: list[dict], as_of: str) -> None:
             _pct_cell(f["spy_1d"]),
             _pct_cell(f["benchmark_1d"]),
             f"[{div_color}]{f['divergence_vs_benchmark']:+.1f}%[/{div_color}]",
-            f"{icon} {f['strength']}",
+            f"{icon} {strength_text}",
         )
 
     console.print(table)
