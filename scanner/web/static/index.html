@@ -657,6 +657,17 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
       <div style="background:var(--warn-bg,#332200);border:1px solid var(--warn-border,#664400);border-radius:4px;padding:8px 12px;margin-bottom:14px;color:var(--warn-text,#ffaa00);font-size:12px;">
         ⚠ EXPLORATORY — backtesting pending. All signals display WATCH only and do not affect action labels.
       </div>
+      <!-- Theme Divergence Flags -->
+      <div id="theme-divergence-section" style="display:none;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span class="section-title" id="theme-divergence-title">⚡ THEME DIVERGENCE FLAGS</span>
+          <button id="theme-divergence-toggle" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">collapse ▲</button>
+        </div>
+        <div id="theme-divergence-card" style="border:1px solid var(--orange,#f97316);border-radius:6px;padding:12px 14px;">
+          <div id="theme-divergence-body"><span style="color:var(--dim)">Loading…</span></div>
+          <div id="theme-divergence-tip" style="margin-top:10px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px;">💡 Tip: Theme divergence often precedes basket-level momentum. Check news across the basket.</div>
+        </div>
+      </div>
       <div id="themes-c"><div class="loading-overlay">Loading&hellip;</div></div>
     </div>
 
@@ -1042,6 +1053,60 @@ function renderDivergence(d){
   var btn=document.getElementById('divergence-toggle');
   var body=document.getElementById('divergence-body');
   var tip=document.getElementById('divergence-tip');
+  if(btn&&body){btn.addEventListener('click',function(){
+    var collapsed=body.style.display==='none';
+    body.style.display=collapsed?'':'none';
+    if(tip)tip.style.display=collapsed?'':'none';
+    btn.textContent=collapsed?'collapse ▲':'expand ▼';
+  });}
+})();
+
+async function loadThemeDivergence(){
+  try{
+    var r=await fetch('/api/divergence/themes');
+    if(!r.ok)throw new Error(r.statusText);
+    renderThemeDivergence(await r.json());
+  }catch(err){
+    console.error('theme-divergence:',err);
+    var sec=document.getElementById('theme-divergence-section');
+    if(sec)sec.style.display='none';
+  }
+}
+function renderThemeDivergence(d){
+  var sec=document.getElementById('theme-divergence-section');
+  var body=document.getElementById('theme-divergence-body');
+  var title=document.getElementById('theme-divergence-title');
+  var card=document.getElementById('theme-divergence-card');
+  var flags=d.flags||[];
+  if(!flags.length){if(sec)sec.style.display='none';return;}
+  if(sec)sec.style.display='block';
+  if(title)title.innerHTML='&#9889; THEME DIVERGENCE FLAGS ('+flags.length+')';
+  var maxStrength=flags[0]?flags[0].strength:'BENCHMARK';
+  if(card)card.style.border=divStrengthBorder(maxStrength);
+  var html='<div style="display:flex;flex-direction:column;gap:8px;">';
+  flags.forEach(function(f){
+    var label=f.theme||f.benchmark||'';
+    var icon=divStrengthIcon(f.strength);
+    var tc=f.ticker_1d>0?'var(--green)':'var(--red)';
+    var bc=f.benchmark_1d>0?'var(--green)':'var(--red)';
+    html+='<div style="display:flex;flex-direction:column;gap:2px;padding:8px 10px;background:var(--card-bg,#1a1d23);border-radius:4px;">';
+    html+='<div style="display:flex;align-items:center;gap:10px;">';
+    html+='<span style="font-weight:700;font-size:13px;">'+f.ticker+'</span>';
+    html+='<span style="color:'+tc+';font-size:12px;">'+fmtPct(f.ticker_1d)+'</span>';
+    html+='<span style="color:var(--muted);font-size:11px;">vs '+f.benchmark+'</span>';
+    html+='<span style="color:'+bc+';font-size:12px;">'+fmtPct(f.benchmark_1d)+'</span>';
+    if(label)html+='<span style="color:var(--dim);font-size:11px;">&#8594; '+label+'</span>';
+    html+='</div>';
+    html+='<div style="font-size:11px;color:var(--muted);">'+icon+' <strong>'+f.strength+'</strong> divergence &middot; Div vs bench: <span style="color:var(--green)">+'+f.divergence_vs_benchmark.toFixed(1)+'%</span></div>';
+    html+='</div>';
+  });
+  html+='</div>';
+  if(body)body.innerHTML=html;
+}
+(function(){
+  var btn=document.getElementById('theme-divergence-toggle');
+  var body=document.getElementById('theme-divergence-body');
+  var tip=document.getElementById('theme-divergence-tip');
   if(btn&&body){btn.addEventListener('click',function(){
     var collapsed=body.style.display==='none';
     body.style.display=collapsed?'':'none';
@@ -2342,7 +2407,7 @@ async function refreshAll(){
   var btn=document.getElementById('refresh-btn');
   btn.querySelector('.nav-icon').textContent='↻';
   btn.disabled=true;
-  await Promise.allSettled([loadBanner(),loadDivergence(),loadScheduler(),loadMegacap(),loadScan(),loadJournal(),loadDivergenceHistory(),loadActivityLog(),loadObservations(),loadHighImpactFilings(),loadThemes(),loadDiscovery()]);
+  await Promise.allSettled([loadBanner(),loadDivergence(),loadThemeDivergence(),loadScheduler(),loadMegacap(),loadScan(),loadJournal(),loadDivergenceHistory(),loadActivityLog(),loadObservations(),loadHighImpactFilings(),loadThemes(),loadDiscovery()]);
   btn.disabled=false;
   var now=new Date();
   var ts=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});

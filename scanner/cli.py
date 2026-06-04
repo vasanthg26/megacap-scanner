@@ -949,7 +949,7 @@ def scan(
     # Divergence flags — tickers rising while market/benchmark fell
     try:
         from scanner.signals.divergence import find_divergences, store_divergences
-        _div_flags = find_divergences(conn, as_of)
+        _div_flags = find_divergences(conn, as_of, source="dependency")
         if _div_flags:
             store_divergences(_div_flags, as_of, conn)
         _render_divergence_panel(_div_flags, as_of)
@@ -1380,6 +1380,16 @@ def scan_themes(
         "\n[dim]Validated: HUT (WGMI), NOK (XLK 2024+), BB (XLK 2024+)\n"
         "Exploratory: BE, AEHR, FPS, YSS -- insufficient edge or data[/dim]"
     )
+
+    # Theme divergence flags
+    try:
+        from scanner.signals.divergence import find_divergences, store_divergences
+        _tdiv = find_divergences(conn, as_of, source="theme")
+        if _tdiv:
+            store_divergences(_tdiv, as_of, conn)
+        _render_divergence_panel(_tdiv, as_of)
+    except Exception as _tdiv_exc:
+        logger.warning("Theme divergence flag computation failed: %s", _tdiv_exc)
 
 
 _MEGACAP_LABEL_STYLE = {

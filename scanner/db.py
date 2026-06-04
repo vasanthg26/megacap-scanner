@@ -295,6 +295,7 @@ CREATE TABLE IF NOT EXISTS divergence_flags (
     strength                VARCHAR,
     theme                   VARCHAR,
     parent                  VARCHAR,
+    source                  VARCHAR,
     PRIMARY KEY (ticker, flag_date)
 );
 """
@@ -316,6 +317,7 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             "ALTER TABLE filings_8k ADD COLUMN impact_explanation TEXT",
             "ALTER TABLE journal ADD COLUMN signal_source VARCHAR DEFAULT 'dependency'",
             "ALTER TABLE rs_accumulation ADD COLUMN rs_adj DOUBLE",
+            "ALTER TABLE divergence_flags ADD COLUMN source VARCHAR",
         ]:
             try:
                 conn.execute(_stmt)

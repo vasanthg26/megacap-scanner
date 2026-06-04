@@ -749,10 +749,17 @@ def _run_scan_today_sync(as_of: str | None = None) -> None:
     except Exception as exc:
         logger.error("megacap cache warm failed: %s", exc)
     try:
-        div_result = _compute_divergence_sync(as_of)
-        _cache_set(f"divergence_{as_of}", div_result)
-        _cache_set("divergence_latest", div_result)
-        logger.info("  divergence flags computed (%d flags)", len(div_result.get("flags", [])))
+        dep_div = _compute_divergence_sync(as_of, "dependency")
+        _cache_set(f"divergence_dep_{as_of}", dep_div)
+        _cache_set("divergence_dep_latest", dep_div)
+        theme_div = _compute_divergence_sync(as_of, "theme")
+        _cache_set(f"divergence_theme_{as_of}", theme_div)
+        _cache_set("divergence_theme_latest", theme_div)
+        logger.info(
+            "  divergence flags: %d dependency, %d theme",
+            len(dep_div.get("flags", [])),
+            len(theme_div.get("flags", [])),
+        )
     except Exception as exc:
         logger.error("divergence cache warm failed: %s", exc)
 
@@ -925,20 +932,20 @@ async def api_rotation():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-def _compute_divergence_sync(as_of: str | None = None) -> dict:
+def _compute_divergence_sync(as_of: str | None = None, source: str = "dependency") -> dict:
     from scanner.db import get_connection
     from scanner.signals.divergence import find_divergences, store_divergences
 
     conn = get_connection()
     try:
-        flags = find_divergences(conn, as_of)
+        flags = find_divergences(conn, as_of, source=source)
         effective_date = as_of
         if effective_date is None:
             row = conn.execute("SELECT MAX(date) FROM prices WHERE ticker = 'SPY'").fetchone()
             effective_date = str(row[0]) if row and row[0] else str(date.today())
         if flags:
             store_divergences(flags, effective_date, conn)
-        return {"as_of": effective_date, "flags": flags}
+        return {"as_of": effective_date, "flags": flags, "source": source}
     finally:
         conn.close()
 
@@ -954,7 +961,7 @@ def _compute_divergence_history_sync() -> dict:
             SELECT
                 df.ticker, df.flag_date, df.ticker_1d, df.spy_1d, df.benchmark,
                 df.benchmark_1d, df.divergence_vs_spy, df.divergence_vs_benchmark,
-                df.strength, df.theme, df.parent,
+                df.strength, df.theme, df.parent, df.source,
                 p5.outcome_5d
             FROM divergence_flags df
             LEFT JOIN (
@@ -987,7 +994,7 @@ def _compute_divergence_history_sync() -> dict:
     entries = []
     for row in rows:
         (ticker, flag_date, ticker_1d, spy_1d, benchmark, benchmark_1d,
-         div_vs_spy, div_vs_bench, strength, theme, parent, outcome_5d) = row
+         div_vs_spy, div_vs_bench, strength, theme, parent, source, outcome_5d) = row
         entries.append({
             "ticker": ticker,
             "flag_date": str(flag_date),
@@ -1000,6 +1007,7 @@ def _compute_divergence_history_sync() -> dict:
             "strength": strength,
             "theme": theme,
             "parent": parent,
+            "source": source,
             "outcome_5d": round(outcome_5d, 2) if outcome_5d is not None else None,
         })
     return {"entries": entries}
@@ -1007,16 +1015,33 @@ def _compute_divergence_history_sync() -> dict:
 
 @app.get("/api/divergence")
 async def api_divergence(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
-    cache_key = f"divergence_{scan_date or 'latest'}"
+    """Dependency-source divergence flags for the Scanner page."""
+    cache_key = f"divergence_dep_{scan_date or 'latest'}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
     try:
-        result = await asyncio.to_thread(_compute_divergence_sync, scan_date)
+        result = await asyncio.to_thread(_compute_divergence_sync, scan_date, "dependency")
         _cache_set(cache_key, result)
         return result
     except Exception as exc:
         logger.error("api_divergence failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/divergence/themes")
+async def api_divergence_themes(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
+    """Theme-source divergence flags for the Themes page."""
+    cache_key = f"divergence_theme_{scan_date or 'latest'}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_divergence_sync, scan_date, "theme")
+        _cache_set(cache_key, result)
+        return result
+    except Exception as exc:
+        logger.error("api_divergence_themes failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 

@@ -87,18 +87,22 @@ def _classify_divergence(
         "strength": strength,
         "theme": theme,
         "parent": parent,
+        "source": "dependency" if parent is not None else "theme",
     }
 
 
 def find_divergences(
-    conn: duckdb.DuckDBPyConnection, as_of: str | None = None
+    conn: duckdb.DuckDBPyConnection,
+    as_of: str | None = None,
+    source: str = "all",
 ) -> list[dict]:
     """Find tickers that rose while their benchmark fell on the given date.
 
-    For dependency tickers, the benchmark is the primary parent.
-    For theme tickers not in the dependency graph, the benchmark is the theme ETF.
+    source='dependency' — dependency graph tickers only (benchmark = primary parent)
+    source='theme'      — theme basket tickers only (benchmark = theme ETF)
+    source='all'        — both (default)
 
-    Returns list of flag dicts sorted by divergence_vs_benchmark descending.
+    Returns list of flag dicts sorted by divergence_vs_benchmark descending, capped at 7.
     """
     if as_of is None:
         row = conn.execute(
@@ -152,50 +156,51 @@ def find_divergences(
     flags: list[dict] = []
     processed: set[str] = set()
 
-    for tkr, (parent, _) in dep_parents.items():
-        processed.add(tkr)
-        ticker_1d = returns_1d.get(tkr)
-        if ticker_1d is None:
-            continue
-        benchmark_1d = returns_1d.get(parent)
-        if benchmark_1d is None:
-            continue
-        theme_label = theme_map.get(tkr, (None, None))[1]
-        flag = _classify_divergence(
-            ticker=tkr,
-            ticker_1d=ticker_1d,
-            spy_1d=spy_1d,
-            benchmark=parent,
-            benchmark_1d=benchmark_1d,
-            theme=theme_label,
-            parent=parent,
-            adaptive=adaptive,
-        )
-        if flag:
-            flags.append(flag)
+    if source in ("dependency", "all"):
+        for tkr, (parent, _) in dep_parents.items():
+            processed.add(tkr)
+            ticker_1d = returns_1d.get(tkr)
+            if ticker_1d is None:
+                continue
+            benchmark_1d = returns_1d.get(parent)
+            if benchmark_1d is None:
+                continue
+            theme_label = theme_map.get(tkr, (None, None))[1]
+            flag = _classify_divergence(
+                ticker=tkr,
+                ticker_1d=ticker_1d,
+                spy_1d=spy_1d,
+                benchmark=parent,
+                benchmark_1d=benchmark_1d,
+                theme=theme_label,
+                parent=parent,
+                adaptive=adaptive,
+            )
+            if flag:
+                flags.append(flag)
 
-    # Theme-only tickers (not in dependency graph)
-    for tkr, (bench, label) in theme_map.items():
-        if tkr in processed:
-            continue
-        ticker_1d = returns_1d.get(tkr)
-        if ticker_1d is None:
-            continue
-        benchmark_1d = returns_1d.get(bench)
-        if benchmark_1d is None:
-            continue
-        flag = _classify_divergence(
-            ticker=tkr,
-            ticker_1d=ticker_1d,
-            spy_1d=spy_1d,
-            benchmark=bench,
-            benchmark_1d=benchmark_1d,
-            theme=label,
-            parent=None,
-            adaptive=adaptive,
-        )
-        if flag:
-            flags.append(flag)
+    if source in ("theme", "all"):
+        for tkr, (bench, label) in theme_map.items():
+            if tkr in processed:
+                continue
+            ticker_1d = returns_1d.get(tkr)
+            if ticker_1d is None:
+                continue
+            benchmark_1d = returns_1d.get(bench)
+            if benchmark_1d is None:
+                continue
+            flag = _classify_divergence(
+                ticker=tkr,
+                ticker_1d=ticker_1d,
+                spy_1d=spy_1d,
+                benchmark=bench,
+                benchmark_1d=benchmark_1d,
+                theme=label,
+                parent=None,
+                adaptive=adaptive,
+            )
+            if flag:
+                flags.append(flag)
 
     flags.sort(key=lambda f: f["divergence_vs_benchmark"], reverse=True)
     return flags[:7]
@@ -211,13 +216,14 @@ def store_divergences(
                 """
                 INSERT OR REPLACE INTO divergence_flags
                     (ticker, flag_date, ticker_1d, spy_1d, benchmark, benchmark_1d,
-                     divergence_vs_spy, divergence_vs_benchmark, strength, theme, parent)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     divergence_vs_spy, divergence_vs_benchmark, strength, theme, parent, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     f["ticker"], flag_date, f["ticker_1d"], f["spy_1d"],
                     f["benchmark"], f["benchmark_1d"], f["divergence_vs_spy"],
                     f["divergence_vs_benchmark"], f["strength"], f["theme"], f["parent"],
+                    f.get("source"),
                 ],
             )
         except Exception as exc:
