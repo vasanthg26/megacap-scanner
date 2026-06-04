@@ -58,19 +58,19 @@ def _classify_divergence(
     strength: str | None = None
 
     if adaptive:
-        # SPY > +1%: require relative outperformance vs SPY
-        if divergence_vs_spy >= 0.02 and divergence_vs_benchmark >= 0.02:
+        # SPY > +1%: require ticker >= SPY + 3% relative outperformance
+        if divergence_vs_spy >= 0.03 and divergence_vs_benchmark >= 0.02:
             strength = "STRONG"
-        elif divergence_vs_spy >= 0.015 and divergence_vs_benchmark >= 0.015:
+        elif divergence_vs_spy >= 0.03 and divergence_vs_benchmark >= 0.03:
             strength = "MODERATE"
-        elif ticker_1d >= 0.015 and benchmark_1d <= 0:
+        elif ticker_1d >= 0.03 and benchmark_1d <= -0.01:
             strength = "BENCHMARK"
     else:
         if ticker_1d >= 0.02 and spy_1d <= 0.0 and divergence_vs_benchmark >= 0.02:
             strength = "STRONG"
-        elif ticker_1d >= 0.01 and spy_1d <= 0.005 and divergence_vs_benchmark >= 0.015:
+        elif ticker_1d >= 0.02 and spy_1d <= 0.0 and divergence_vs_benchmark >= 0.03:
             strength = "MODERATE"
-        elif ticker_1d >= 0.015 and benchmark_1d <= 0.0:
+        elif ticker_1d >= 0.03 and benchmark_1d <= -0.01:
             strength = "BENCHMARK"
 
     if strength is None:
@@ -198,7 +198,7 @@ def find_divergences(
             flags.append(flag)
 
     flags.sort(key=lambda f: f["divergence_vs_benchmark"], reverse=True)
-    return flags
+    return flags[:7]
 
 
 def store_divergences(
