@@ -282,6 +282,21 @@ CREATE TABLE IF NOT EXISTS placeholder_resolutions (
     created_at         TIMESTAMP NOT NULL,
     PRIMARY KEY (ticker, accession_number, placeholder)
 );
+
+CREATE TABLE IF NOT EXISTS divergence_flags (
+    ticker                  VARCHAR NOT NULL,
+    flag_date               DATE    NOT NULL,
+    ticker_1d               DOUBLE,
+    spy_1d                  DOUBLE,
+    benchmark               VARCHAR,
+    benchmark_1d            DOUBLE,
+    divergence_vs_spy       DOUBLE,
+    divergence_vs_benchmark DOUBLE,
+    strength                VARCHAR,
+    theme                   VARCHAR,
+    parent                  VARCHAR,
+    PRIMARY KEY (ticker, flag_date)
+);
 """
 
 

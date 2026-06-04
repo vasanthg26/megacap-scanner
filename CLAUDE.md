@@ -272,6 +272,26 @@ or interact with the regime gate. It is a warning only.
 - IC backtest uses 5-day forward returns from `prices` table; minimum 10 observation pairs required
 - n=60 RS observations is the minimum to trigger backtest, not a statistical guarantee — treat promoted tickers as Watch candidates until 100+ observations accumulate in production
 
+## Divergence Flags
+
+Fires when a ticker rises while its benchmark (parent or theme ETF) falls:
+- **STRONG**: ticker_1d >= +2%, SPY <= 0%, divergence_vs_benchmark >= +2%
+- **MODERATE**: ticker_1d >= +1%, SPY <= +0.5%, divergence_vs_benchmark >= +1.5%
+- **BENCHMARK**: ticker_1d >= +1.5%, benchmark_1d <= 0% (sector outperformance regardless of SPY)
+- **Adaptive mode**: if SPY > +1%, relative outperformance vs SPY required (+2%) instead of absolute thresholds
+
+Stored in `divergence_flags` table (30-day rolling window, PRIMARY KEY on ticker+date).
+Shown at top of `scanner scan` CLI output and at top of web UI Scanner page (above Mega-Cap Universe).
+Historical view with 5-day outcome tracking available in Journal page of web UI (`/api/divergence/history`).
+Run alongside `run-scan` — no separate scheduler job.
+
+Real-world validation: 2026-06-03
+  NVTS — NVDA MGX collaboration announced
+  DOCN/AKAM — BofA Tech Conference 2026
+These were flagged by RS signal before news was widely known.
+
+Implementation: `scanner/signals/divergence.py` — `find_divergences()`, `store_divergences()`.
+
 ## Survivorship-Bias Warning
 
 yfinance only returns currently-listed tickers. Any backtest result using yfinance data

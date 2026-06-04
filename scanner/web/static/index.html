@@ -613,6 +613,17 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
         </div>
         <div id="high-filings-list"><div style="color:var(--muted);font-size:12px;font-style:italic;">Loading…</div></div>
       </div>
+      <!-- Divergence Flags -->
+      <div id="divergence-section" style="display:none;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span class="section-title" id="divergence-title">⚡ DIVERGENCE FLAGS</span>
+          <button id="divergence-toggle" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">collapse ▲</button>
+        </div>
+        <div id="divergence-card" style="border:1px solid var(--orange,#f97316);border-radius:6px;padding:12px 14px;">
+          <div id="divergence-body"><span style="color:var(--dim)">Loading…</span></div>
+          <div id="divergence-tip" style="margin-top:10px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px;">💡 Tip: Strong divergence often precedes news catalysts. Check filings and news.</div>
+        </div>
+      </div>
       <div class="section-header">
         <span class="section-title">Mega-Cap Universe</span>
         <span class="section-date" id="megacap-date"></span>
@@ -720,6 +731,11 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     <!-- JOURNAL -->
     <div class="page" id="page-journal">
       <div class="page-title">Journal</div>
+      <!-- Divergence History -->
+      <div id="div-history-section" style="margin-bottom:24px;">
+        <div class="section-title" style="margin-bottom:8px;">⚡ Past Divergence Flags (30 days)</div>
+        <div id="div-history-c"><div class="loading-overlay">Loading…</div></div>
+      </div>
       <div id="journal-perf"></div>
       <div id="journal-controls">
         <select id="journal-date-select"><option value="">All dates</option></select>
@@ -960,6 +976,123 @@ function renderBanner(d){
   if(d.xlk_vs_spy!=null)parts.push('<span class="banner-label">XLK vs SPY:</span><span class="'+valClass(d.xlk_vs_spy)+'">'+fmtPct(d.xlk_vs_spy*100)+'</span>');
   if(d.as_of)parts.push('<span style="color:var(--dim)">as of '+fmtDate(d.as_of)+'</span>');
   el.innerHTML=parts.length?parts.join('<span class="banner-sep">&middot;</span>'):'<span style="color:var(--dim)">No rotation data</span>';
+}
+
+/* ── Divergence Flags ─────────────────── */
+async function loadDivergence(){
+  try{
+    var r=await fetch('/api/divergence');
+    if(!r.ok)throw new Error(r.statusText);
+    renderDivergence(await r.json());
+  }catch(err){
+    console.error('divergence:',err);
+    var sec=document.getElementById('divergence-section');
+    if(sec)sec.style.display='none';
+  }
+}
+function divStrengthBorder(s){
+  if(!s)return'1px solid var(--orange,#f97316)';
+  var u=s.toUpperCase();
+  if(u==='STRONG')return'1px solid var(--orange,#f97316)';
+  if(u==='MODERATE')return'1px solid var(--yellow,#eab308)';
+  return'1px solid var(--blue,#3b82f6)';
+}
+function divStrengthIcon(s){
+  if(!s)return'';
+  var u=s.toUpperCase();
+  if(u==='STRONG')return'&#9889;&#9889;';
+  if(u==='MODERATE')return'&#9889;';
+  return'&#128200;';
+}
+function renderDivergence(d){
+  var sec=document.getElementById('divergence-section');
+  var body=document.getElementById('divergence-body');
+  var title=document.getElementById('divergence-title');
+  var card=document.getElementById('divergence-card');
+  var flags=d.flags||[];
+  if(!flags.length){if(sec)sec.style.display='none';return;}
+  if(sec)sec.style.display='block';
+  if(title)title.innerHTML='&#9889; DIVERGENCE FLAGS ('+flags.length+')';
+  var maxStrength=flags[0]?flags[0].strength:'BENCHMARK';
+  if(card)card.style.border=divStrengthBorder(maxStrength);
+  var html='<div style="display:flex;flex-direction:column;gap:8px;">';
+  flags.forEach(function(f){
+    var label=f.theme||f.parent||f.benchmark||'';
+    var icon=divStrengthIcon(f.strength);
+    var tc=f.ticker_1d>0?'var(--green)':'var(--red)';
+    var sc=f.spy_1d>0?'var(--green)':'var(--red)';
+    var bc=f.benchmark_1d>0?'var(--green)':'var(--red)';
+    var dc='var(--green)';
+    html+='<div style="display:flex;flex-direction:column;gap:2px;padding:8px 10px;background:var(--card-bg,#1a1d23);border-radius:4px;">';
+    html+='<div style="display:flex;align-items:center;gap:10px;">';
+    html+='<span style="font-weight:700;font-size:13px;">'+f.ticker+'</span>';
+    html+='<span style="color:'+tc+';font-size:12px;">'+fmtPct(f.ticker_1d)+'</span>';
+    html+='<span style="color:var(--muted);font-size:11px;">vs '+f.benchmark+'</span>';
+    html+='<span style="color:'+bc+';font-size:12px;">'+fmtPct(f.benchmark_1d)+'</span>';
+    if(label)html+='<span style="color:var(--dim);font-size:11px;">&#8594; '+label+'</span>';
+    html+='</div>';
+    html+='<div style="font-size:11px;color:var(--muted);">'+icon+' <strong>'+f.strength+'</strong> divergence &mdash; check catalysts &middot; Div vs bench: <span style="color:'+dc+'">+'+f.divergence_vs_benchmark.toFixed(1)+'%</span></div>';
+    html+='</div>';
+  });
+  html+='</div>';
+  if(body)body.innerHTML=html;
+}
+// Collapse toggle
+(function(){
+  var btn=document.getElementById('divergence-toggle');
+  var body=document.getElementById('divergence-body');
+  var tip=document.getElementById('divergence-tip');
+  if(btn&&body){btn.addEventListener('click',function(){
+    var collapsed=body.style.display==='none';
+    body.style.display=collapsed?'':'none';
+    if(tip)tip.style.display=collapsed?'':'none';
+    btn.textContent=collapsed?'collapse ▲':'expand ▼';
+  });}
+})();
+
+async function loadDivergenceHistory(){
+  var c=document.getElementById('div-history-c');
+  if(!c)return;
+  try{
+    var r=await fetch('/api/divergence/history');
+    if(!r.ok)throw new Error(r.statusText);
+    renderDivergenceHistory(await r.json());
+  }catch(err){
+    console.error('div-history:',err);
+    if(c)c.innerHTML='<div style="color:var(--red);font-size:12px;">Failed to load divergence history</div>';
+  }
+}
+function renderDivergenceHistory(d){
+  var c=document.getElementById('div-history-c');
+  if(!c)return;
+  var entries=d.entries||[];
+  if(!entries.length){c.innerHTML='<div style="color:var(--muted);font-size:12px;font-style:italic;">No divergence flags in the last 30 days</div>';return;}
+  var cols=['Date','Ticker','1d%','SPY%','Div%','Strength','Outcome(5d)'];
+  var widths=[90,65,65,65,75,100,90];
+  var aligns=['','','r','r','r','','r'];
+  var html='<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html+='<colgroup>'+widths.map(function(w){return'<col style="width:'+w+'px">';}).join('')+'</colgroup>';
+  html+='<thead><tr>'+cols.map(function(l,i){return'<th style="text-align:'+(aligns[i]==='r'?'right':'left')+';padding:4px 8px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);">'+l+'</th>';}).join('')+'</tr></thead>';
+  html+='<tbody>';
+  entries.forEach(function(e){
+    var icon=divStrengthIcon(e.strength);
+    var tc=e.ticker_1d>0?'var(--green)':'var(--red)';
+    var sc=e.spy_1d>0?'var(--green)':'var(--red)';
+    var dc=(e.divergence_vs_benchmark||0)>0?'var(--green)':'var(--red)';
+    var oc=e.outcome_5d==null?'var(--dim)':e.outcome_5d>0?'var(--green)':'var(--red)';
+    var outStr=e.outcome_5d==null?'—':fmtPct(e.outcome_5d);
+    html+='<tr style="border-bottom:1px solid var(--border);">';
+    html+='<td style="padding:5px 8px;">'+e.flag_date+'</td>';
+    html+='<td style="padding:5px 8px;font-weight:600;">'+e.ticker+'</td>';
+    html+='<td style="padding:5px 8px;text-align:right;color:'+tc+'">'+fmtPct(e.ticker_1d)+'</td>';
+    html+='<td style="padding:5px 8px;text-align:right;color:'+sc+'">'+fmtPct(e.spy_1d)+'</td>';
+    html+='<td style="padding:5px 8px;text-align:right;color:'+dc+'">'+fmtPct(e.divergence_vs_benchmark)+'</td>';
+    html+='<td style="padding:5px 8px;">'+icon+' '+e.strength+'</td>';
+    html+='<td style="padding:5px 8px;text-align:right;color:'+oc+'">'+outStr+'</td>';
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  c.innerHTML=html;
 }
 
 /* ── Signal summary + correction alert ── */
@@ -2209,7 +2342,7 @@ async function refreshAll(){
   var btn=document.getElementById('refresh-btn');
   btn.querySelector('.nav-icon').textContent='↻';
   btn.disabled=true;
-  await Promise.allSettled([loadBanner(),loadScheduler(),loadMegacap(),loadScan(),loadJournal(),loadActivityLog(),loadObservations(),loadHighImpactFilings(),loadThemes(),loadDiscovery()]);
+  await Promise.allSettled([loadBanner(),loadDivergence(),loadScheduler(),loadMegacap(),loadScan(),loadJournal(),loadDivergenceHistory(),loadActivityLog(),loadObservations(),loadHighImpactFilings(),loadThemes(),loadDiscovery()]);
   btn.disabled=false;
   var now=new Date();
   var ts=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});

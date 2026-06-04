@@ -748,6 +748,13 @@ def _run_scan_today_sync(as_of: str | None = None) -> None:
         logger.info("  megacap cache warm")
     except Exception as exc:
         logger.error("megacap cache warm failed: %s", exc)
+    try:
+        div_result = _compute_divergence_sync(as_of)
+        _cache_set(f"divergence_{as_of}", div_result)
+        _cache_set("divergence_latest", div_result)
+        logger.info("  divergence flags computed (%d flags)", len(div_result.get("flags", [])))
+    except Exception as exc:
+        logger.error("divergence cache warm failed: %s", exc)
 
 
 def _warm_caches_sync() -> None:
@@ -915,6 +922,115 @@ async def api_rotation():
         return await asyncio.to_thread(_compute_rotation_sync)
     except Exception as exc:
         logger.error("api_rotation failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _compute_divergence_sync(as_of: str | None = None) -> dict:
+    from scanner.db import get_connection
+    from scanner.signals.divergence import find_divergences, store_divergences
+
+    conn = get_connection()
+    try:
+        flags = find_divergences(conn, as_of)
+        effective_date = as_of
+        if effective_date is None:
+            row = conn.execute("SELECT MAX(date) FROM prices WHERE ticker = 'SPY'").fetchone()
+            effective_date = str(row[0]) if row and row[0] else str(date.today())
+        if flags:
+            store_divergences(flags, effective_date, conn)
+        return {"as_of": effective_date, "flags": flags}
+    finally:
+        conn.close()
+
+
+def _compute_divergence_history_sync() -> dict:
+    """Return last 30 days of divergence flags with 5-day forward return outcomes."""
+    from scanner.db import get_connection
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                df.ticker, df.flag_date, df.ticker_1d, df.spy_1d, df.benchmark,
+                df.benchmark_1d, df.divergence_vs_spy, df.divergence_vs_benchmark,
+                df.strength, df.theme, df.parent,
+                p5.outcome_5d
+            FROM divergence_flags df
+            LEFT JOIN (
+                SELECT base.ticker, base.flag_date,
+                    CASE WHEN base.price_base > 0
+                         THEN (fut.price_fut - base.price_base) / base.price_base * 100
+                         ELSE NULL END AS outcome_5d
+                FROM (
+                    SELECT df2.ticker, df2.flag_date,
+                        (SELECT adj_close FROM prices p
+                         WHERE p.ticker = df2.ticker AND p.date <= df2.flag_date
+                         ORDER BY p.date DESC LIMIT 1) AS price_base
+                    FROM divergence_flags df2
+                ) base
+                LEFT JOIN (
+                    SELECT df3.ticker, df3.flag_date,
+                        (SELECT adj_close FROM prices p
+                         WHERE p.ticker = df3.ticker AND p.date > df3.flag_date
+                         ORDER BY p.date ASC LIMIT 1 OFFSET 4) AS price_fut
+                    FROM divergence_flags df3
+                ) fut ON base.ticker = fut.ticker AND base.flag_date = fut.flag_date
+            ) p5 ON df.ticker = p5.ticker AND df.flag_date = p5.flag_date
+            WHERE df.flag_date >= CURRENT_DATE - INTERVAL 30 DAYS
+            ORDER BY df.flag_date DESC, df.divergence_vs_benchmark DESC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    entries = []
+    for row in rows:
+        (ticker, flag_date, ticker_1d, spy_1d, benchmark, benchmark_1d,
+         div_vs_spy, div_vs_bench, strength, theme, parent, outcome_5d) = row
+        entries.append({
+            "ticker": ticker,
+            "flag_date": str(flag_date),
+            "ticker_1d": ticker_1d,
+            "spy_1d": spy_1d,
+            "benchmark": benchmark,
+            "benchmark_1d": benchmark_1d,
+            "divergence_vs_spy": div_vs_spy,
+            "divergence_vs_benchmark": div_vs_bench,
+            "strength": strength,
+            "theme": theme,
+            "parent": parent,
+            "outcome_5d": round(outcome_5d, 2) if outcome_5d is not None else None,
+        })
+    return {"entries": entries}
+
+
+@app.get("/api/divergence")
+async def api_divergence(scan_date: str = Query(default=None, description="YYYY-MM-DD")):
+    cache_key = f"divergence_{scan_date or 'latest'}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_divergence_sync, scan_date)
+        _cache_set(cache_key, result)
+        return result
+    except Exception as exc:
+        logger.error("api_divergence failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/divergence/history")
+async def api_divergence_history():
+    cached = _cache_get("divergence_history")
+    if cached is not None:
+        return cached
+    try:
+        result = await asyncio.to_thread(_compute_divergence_history_sync)
+        _cache_set("divergence_history", result)
+        return result
+    except Exception as exc:
+        logger.error("api_divergence_history failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 

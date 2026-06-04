@@ -499,6 +499,51 @@ def _fmt_insider(summary: dict) -> str:
     return "[green]+[/green]"
 
 
+def _render_divergence_panel(flags: list[dict], as_of: str) -> None:
+    """Render the divergence flags section. Silently skips if no flags."""
+    if not flags:
+        return
+
+    _STRENGTH_ICON = {"STRONG": "⚡⚡", "MODERATE": "⚡", "BENCHMARK": "📈"}
+
+    table = Table(
+        title=f"[bold orange1]DIVERGENCE FLAGS — {as_of}[/bold orange1]",
+        box=box.SIMPLE_HEAD,
+        border_style="orange1",
+    )
+    table.add_column("Ticker", width=8)
+    table.add_column("Theme/Parent", width=22)
+    table.add_column("1d%", justify="right", width=8)
+    table.add_column("SPY%", justify="right", width=8)
+    table.add_column("Bench%", justify="right", width=8)
+    table.add_column("Div vs Bench", justify="right", width=13)
+    table.add_column("Strength", width=15)
+
+    for f in flags:
+        icon = _STRENGTH_ICON.get(f["strength"], "")
+        label = f["theme"] or f["parent"] or f["benchmark"]
+        if label and len(label) > 22:
+            label = label[:21] + "…"
+
+        def _pct_cell(v: float) -> str:
+            color = "green" if v > 0 else "red"
+            return f"[{color}]{v:+.1f}%[/{color}]"
+
+        div_color = "bold green" if f["strength"] == "STRONG" else "green"
+        table.add_row(
+            f["ticker"],
+            label or "—",
+            _pct_cell(f["ticker_1d"]),
+            _pct_cell(f["spy_1d"]),
+            _pct_cell(f["benchmark_1d"]),
+            f"[{div_color}]{f['divergence_vs_benchmark']:+.1f}%[/{div_color}]",
+            f"{icon} {f['strength']}",
+        )
+
+    console.print(table)
+    console.print("[dim]Tip: Check news and filings for these tickers — divergence often precedes a catalyst.[/dim]")
+
+
 def _render_rotation_panel(rot) -> None:
     """Render the XLK sector rotation banner. Silently skips if rot is None."""
     if rot is None:
@@ -900,6 +945,16 @@ def scan(
     except Exception:
         _rot = None
     _render_rotation_panel(_rot)
+
+    # Divergence flags — tickers rising while market/benchmark fell
+    try:
+        from scanner.signals.divergence import find_divergences, store_divergences
+        _div_flags = find_divergences(conn, as_of)
+        if _div_flags:
+            store_divergences(_div_flags, as_of, conn)
+        _render_divergence_panel(_div_flags, as_of)
+    except Exception as _div_exc:
+        logger.warning("Divergence flag computation failed: %s", _div_exc)
 
     # Pass 1 — collect all scores across every parent to build the cross-sectional universe.
     per_parent: dict[str, list[tuple[str, float]]] = {}
