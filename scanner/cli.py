@@ -1381,15 +1381,20 @@ def scan_themes(
         "Exploratory: BE, AEHR, FPS, YSS -- insufficient edge or data[/dim]"
     )
 
-    # Theme divergence flags
+    # Theme divergence flags — open a fresh connection (original was closed above)
     try:
+        from scanner.db import get_connection as _gc
         from scanner.signals.divergence import find_divergences, store_divergences
-        _tdiv = find_divergences(conn, as_of, source="theme")
-        if _tdiv:
-            store_divergences(_tdiv, as_of, conn)
+        _div_conn = _gc()
+        try:
+            _tdiv = find_divergences(_div_conn, as_of, source="theme")
+            if _tdiv:
+                store_divergences(_tdiv, as_of, _div_conn)
+        finally:
+            _div_conn.close()
         _render_divergence_panel(_tdiv, as_of)
     except Exception as _tdiv_exc:
-        logger.warning("Theme divergence flag computation failed: %s", _tdiv_exc)
+        logging.getLogger(__name__).warning("Theme divergence flag computation failed: %s", _tdiv_exc)
 
 
 _MEGACAP_LABEL_STYLE = {
