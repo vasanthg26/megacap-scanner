@@ -504,7 +504,7 @@ def _render_divergence_panel(flags: list[dict], as_of: str) -> None:
     if not flags:
         return
 
-    _STRENGTH_ICON = {"STRONG": "⚡⚡", "MODERATE": "⚡", "BENCHMARK": "📈"}
+    _STRENGTH_ICON = {"STRONG": "⚡⚡", "MODERATE": "⚡", "BENCHMARK": "📈", "SECTOR_OUTPERFORM": "🚀"}
 
     table = Table(
         title=f"[bold orange1]DIVERGENCE FLAGS — {as_of}[/bold orange1]",

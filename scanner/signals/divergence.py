@@ -50,6 +50,7 @@ def _classify_divergence(
     theme: str | None,
     parent: str | None,
     adaptive: bool,
+    is_theme_source: bool = False,
 ) -> dict | None:
     """Return a flag dict if the ticker qualifies, else None."""
     divergence_vs_spy = ticker_1d - spy_1d
@@ -57,7 +58,10 @@ def _classify_divergence(
 
     strength: str | None = None
 
-    if adaptive:
+    # SECTOR_OUTPERFORM: theme-only, ticker moving 3× faster than benchmark (≥+5%)
+    if is_theme_source and ticker_1d >= 0.05 and benchmark_1d != 0 and ticker_1d >= benchmark_1d * 3:
+        strength = "SECTOR_OUTPERFORM"
+    elif adaptive:
         # SPY > +1%: require ticker >= SPY + 3% relative outperformance
         if divergence_vs_spy >= 0.03 and divergence_vs_benchmark >= 0.02:
             strength = "STRONG"
@@ -198,6 +202,7 @@ def find_divergences(
                 theme=label,
                 parent=None,
                 adaptive=adaptive,
+                is_theme_source=True,
             )
             if flag:
                 flags.append(flag)

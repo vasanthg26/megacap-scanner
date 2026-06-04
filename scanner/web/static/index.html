@@ -1004,6 +1004,7 @@ async function loadDivergence(){
 function divStrengthBorder(s){
   if(!s)return'1px solid var(--orange,#f97316)';
   var u=s.toUpperCase();
+  if(u==='SECTOR_OUTPERFORM')return'1px solid var(--purple,#a855f7)';
   if(u==='STRONG')return'1px solid var(--orange,#f97316)';
   if(u==='MODERATE')return'1px solid var(--yellow,#eab308)';
   return'1px solid var(--blue,#3b82f6)';
@@ -1011,6 +1012,7 @@ function divStrengthBorder(s){
 function divStrengthIcon(s){
   if(!s)return'';
   var u=s.toUpperCase();
+  if(u==='SECTOR_OUTPERFORM')return'&#128640;';
   if(u==='STRONG')return'&#9889;&#9889;';
   if(u==='MODERATE')return'&#9889;';
   return'&#128200;';
