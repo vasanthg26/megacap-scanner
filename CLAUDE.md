@@ -475,7 +475,7 @@ Basket   +0.088  +0.188  +0.168      +0.203       +0.131
 
 ### Critical Minerals & Battery Materials Theme Basket (2026-06-08)
 
-Tickers: SQM, ALB, ALTM, MP
+Tickers: SQM, ALB, ALTM, LAC
 Benchmark: LIT (Global X Lithium & Battery Tech ETF)
 Signal: Z-score × RVOL
 Added: 2026-06-08
@@ -486,32 +486,49 @@ ALB remains in TSLA dependency AND this basket — different signals, different 
 - TSLA dependency: lithium/EV supply chain RS
 - Battery materials: lithium peer Z-score
 
+**Basket composition change (2026-06-08):** MP removed (IC -0.157, negative both halves;
+rare earth magnets are China policy driven, not EV lithium demand). Replaced with LAC
+(Lithium Americas Corp — pure-play North American lithium miner, Thacker Pass project).
+
 **LIT benchmark caveat:** LIT includes both miners and battery tech companies — broader
 than pure lithium. If basket IC is low, consider BATT as alternative benchmark.
 
 **ALTM history caveat:** Arcadium Lithium formed from Livent+Allkem merger Jan 2024.
-Price history may be <1 year — verify depth before treating backtest as statistically meaningful.
+Only 184 trading days of history — treat H1/H2 split for ALTM as directional only.
 
-**MP Materials note:** Rare earth magnets for EV motors. Different commodity from lithium
-but same EV demand driver. Adds basket diversification.
+**LAC note:** Development-stage miner (Thacker Pass). IC = -0.296 both halves — trades on
+permitting/financing news flow not spot lithium prices. Significant basket drag. Monitor;
+consider removal if H2 does not improve by Dec 2026.
 
-**Backtest results (20d forward returns, n=1520 basket obs, H1/H2 index split):**
+**Backtest results v1 — MP basket (2026-06-08, 20d horizon):**
 
 ```
 Ticker   IC(RS)  IC(Z)   IC(ZxRVOL)  H1       H2
 SQM      +0.027  +0.051  +0.054      -0.033   +0.140
 ALB      +0.176  +0.321  +0.305      +0.310   +0.029
 ALTM     -0.056  -0.164  -0.140      -0.367   +0.150
-MP       -0.058  -0.089  -0.157      -0.377   -0.084
+MP       -0.058  -0.089  -0.157      -0.377   -0.084   <- REMOVED
 ------------------------------------------------------
 Basket   -0.004  +0.030  +0.029      +0.154   -0.101
 ```
 
-**Decision: FAIL — basket stays WATCH.** H2 = -0.101 (negative; must exceed +0.05).
-- ALB is the only ticker with positive IC in both halves
-- ALTM has only 184 days of history (Arcadium merger Jan 2024) — H1 drags basket down
-- MP has negative IC in both halves — significant basket drag
-- Re-run Dec 2026 when ALTM accumulates full-year history
+**Backtest results v2 — LAC basket (2026-06-08, 20d horizon):**
+
+```
+Ticker   IC(RS)  IC(Z)   IC(ZxRVOL)  H1       H2
+SQM      +0.027  +0.073  +0.094      +0.025   +0.132
+ALB      +0.176  +0.324  +0.313      +0.272   -0.016
+ALTM     -0.056  -0.004  +0.089      -0.096   +0.457
+LAC      -0.391  -0.308  -0.296      -0.279   -0.249   <- strong drag
+------------------------------------------------------
+Basket   -0.096  +0.010  +0.028      +0.207   -0.113
+```
+
+**Decision: FAIL — basket stays WATCH.** H2 = -0.113, LAC drag dominates.
+- LAC worse than MP (IC -0.296 vs -0.157) — development-stage news-flow stock
+- ALB is the only ticker with directionally clean IC
+- ALTM H2 = +0.457 is promising but n=144 only
+- Re-run Dec 2026; consider removing LAC if IC remains negative
 
 **Promotion criteria** (same bar as Dev Platforms basket):
 - Basket IC H1 > 0.05 AND H2 > 0.05 → update status to VALIDATED, add to VALIDATED_THEMES

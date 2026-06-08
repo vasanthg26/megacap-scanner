@@ -24,7 +24,7 @@ DB_PATH = Path(
     )
 )
 
-BASKET = ["SQM", "ALB", "ALTM", "MP"]
+BASKET = ["SQM", "ALB", "ALTM", "LAC"]
 BENCHMARK = "LIT"
 _LOOKBACK = 20
 _FWD_HORIZON = 20
