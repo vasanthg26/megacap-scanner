@@ -475,60 +475,46 @@ Basket   +0.088  +0.188  +0.168      +0.203       +0.131
 
 ### Critical Minerals & Battery Materials Theme Basket (2026-06-08)
 
-Tickers: SQM, ALB, ALTM, LAC
+Tickers: SQM, ALB, ALTM
 Benchmark: LIT (Global X Lithium & Battery Tech ETF)
 Signal: Z-score × RVOL
 Added: 2026-06-08
-Status: WATCH — pending IC backtest
+Status: WATCH — re-run Dec 2026 when ALTM reaches 12+ months history
 
 Rationale: SQM moved from TSLA dependency (IC -0.055, negative) to commodity theme.
 ALB remains in TSLA dependency AND this basket — different signals, different thesis:
 - TSLA dependency: lithium/EV supply chain RS
 - Battery materials: lithium peer Z-score
 
-**Basket composition change (2026-06-08):** MP removed (IC -0.157, negative both halves;
-rare earth magnets are China policy driven, not EV lithium demand). Replaced with LAC
-(Lithium Americas Corp — pure-play North American lithium miner, Thacker Pass project).
+**Basket composition history:**
+- MP tested, removed: IC -0.157 both halves. Rare earth magnets — China policy driven, not EV lithium.
+- LAC tested, removed: IC -0.296 both halves. Development-stage miner (Thacker Pass permitting),
+  trades on news flow not spot lithium prices.
+- Final basket: producing miners only (SQM, ALB, ALTM vs LIT).
 
 **LIT benchmark caveat:** LIT includes both miners and battery tech companies — broader
-than pure lithium. If basket IC is low, consider BATT as alternative benchmark.
+than pure lithium. If basket IC remains low after ALTM history builds, consider BATT.
 
 **ALTM history caveat:** Arcadium Lithium formed from Livent+Allkem merger Jan 2024.
-Only 184 trading days of history — treat H1/H2 split for ALTM as directional only.
+Only 184 trading days of history — H1/H2 split for ALTM is directional only until Dec 2026.
 
-**LAC note:** Development-stage miner (Thacker Pass). IC = -0.296 both halves — trades on
-permitting/financing news flow not spot lithium prices. Significant basket drag. Monitor;
-consider removal if H2 does not improve by Dec 2026.
-
-**Backtest results v1 — MP basket (2026-06-08, 20d horizon):**
+**Backtest results v3 — producing miners only (2026-06-08, 20d horizon, n=472 basket obs):**
 
 ```
 Ticker   IC(RS)  IC(Z)   IC(ZxRVOL)  H1       H2
-SQM      +0.027  +0.051  +0.054      -0.033   +0.140
-ALB      +0.176  +0.321  +0.305      +0.310   +0.029
-ALTM     -0.056  -0.164  -0.140      -0.367   +0.150
-MP       -0.058  -0.089  -0.157      -0.377   -0.084   <- REMOVED
+SQM      +0.174  +0.322  +0.292      +0.362   +0.201
+ALB      -0.059  +0.184  +0.220      +0.297   -0.271
+ALTM     -0.056  -0.248  -0.078      -0.234   +0.247
 ------------------------------------------------------
-Basket   -0.004  +0.030  +0.029      +0.154   -0.101
+Basket   +0.036  +0.077  +0.144      +0.354   -0.010
 ```
 
-**Backtest results v2 — LAC basket (2026-06-08, 20d horizon):**
-
-```
-Ticker   IC(RS)  IC(Z)   IC(ZxRVOL)  H1       H2
-SQM      +0.027  +0.073  +0.094      +0.025   +0.132
-ALB      +0.176  +0.324  +0.313      +0.272   -0.016
-ALTM     -0.056  -0.004  +0.089      -0.096   +0.457
-LAC      -0.391  -0.308  -0.296      -0.279   -0.249   <- strong drag
-------------------------------------------------------
-Basket   -0.096  +0.010  +0.028      +0.207   -0.113
-```
-
-**Decision: FAIL — basket stays WATCH.** H2 = -0.113, LAC drag dominates.
-- LAC worse than MP (IC -0.296 vs -0.157) — development-stage news-flow stock
-- ALB is the only ticker with directionally clean IC
-- ALTM H2 = +0.457 is promising but n=144 only
-- Re-run Dec 2026; consider removing LAC if IC remains negative
+**Decision: FAIL — basket stays WATCH.** H2 = -0.010, just below the +0.05 bar.
+- H2 improved from -0.113 (LAC basket) to -0.010 — removing development-stage stocks helped
+- SQM is the strongest signal: IC +0.292, H1 +0.362, H2 +0.201 (both halves pass)
+- ALB H2 = -0.271 is the main H2 drag; ALB may be mean-reverting at 20d in H2 subsample
+- ALTM n=144 is too small for reliable H1/H2 split — Dec 2026 re-run is the key gate
+- If ALTM H2 turns positive with fuller history, basket may flip to PASS
 
 **Promotion criteria** (same bar as Dev Platforms basket):
 - Basket IC H1 > 0.05 AND H2 > 0.05 → update status to VALIDATED, add to VALIDATED_THEMES
@@ -537,6 +523,11 @@ Basket   -0.096  +0.010  +0.028      +0.207   -0.113
 **ALB dual-basket design:** ALB appears in both `critical_minerals_battery` theme AND TSLA
 dependents in `dependencies.yaml`. This is intentional — two independent signals, two
 independent theses. scan-themes uses Z-score; scan uses RS vs TSLA.
+
+**Prior backtest runs for reference:**
+- v1 (MP basket): Basket H1 +0.154 / H2 -0.101
+- v2 (LAC basket): Basket H1 +0.207 / H2 -0.113
+- v3 (producing miners): Basket H1 +0.354 / H2 -0.010 (current)
 
 ### TSLA Dependent Backtest Results (2026-06-08)
 

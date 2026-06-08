@@ -342,7 +342,6 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             ("critical_minerals_battery",   "SQM",  "LIT",  "Critical Minerals & Battery Materials"),
             ("critical_minerals_battery",   "ALB",  "LIT",  "Critical Minerals & Battery Materials"),
             ("critical_minerals_battery",   "ALTM", "LIT",  "Critical Minerals & Battery Materials"),
-            ("critical_minerals_battery",   "LAC",  "LIT",  "Critical Minerals & Battery Materials"),
         ]
         for theme_name, ticker, benchmark_etf, theme_label in _THEME_SEED:
             try:

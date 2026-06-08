@@ -50,7 +50,7 @@ BASKETS = [
     },
     {
         "name": "Critical Minerals & Battery Materials",
-        "tickers": ["SQM", "ALB", "ALTM", "LAC"],
+        "tickers": ["SQM", "ALB", "ALTM"],
         "benchmark": "LIT",
     },
 ]
