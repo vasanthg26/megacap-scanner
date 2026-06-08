@@ -2531,7 +2531,13 @@ def backtest(
     console.print(table)
 
     # --- Per-quintile calibration table ---
-    if result.quintile_stats:
+    if ticker_list and len(ticker_list) < 3:
+        console.print(
+            "\n[dim]Note: Single-ticker backtest — quintile bucketing not applicable "
+            "(requires 3+ tickers for cross-sectional ranking). "
+            "IC and regime breakdown are still valid.[/dim]"
+        )
+    elif result.quintile_stats:
         q_table = Table(title="Per-Quintile Calibration", box=box.SIMPLE_HEAD)
         q_table.add_column("Bucket", width=13)
         q_table.add_column("n obs", justify="right", width=7)
@@ -2687,8 +2693,8 @@ def backtest(
         console.print(split_table)
 
     console.print(
-        "\n[dim]Survivorship-bias caveat: yfinance only returns currently-listed tickers. "
-        "Sharpe/DD figures are overstated. Migrate to Polygon.io before trusting live numbers.[/dim]"
+        "\n[dim]Note: Backtest uses price history from DuckDB (Massive.com source). "
+        "Sharpe/DD figures may be overstated due to survivorship bias in the static universe.[/dim]"
     )
 
 
