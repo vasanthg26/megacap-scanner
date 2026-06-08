@@ -2475,12 +2475,19 @@ def backtest(
         Optional[str],
         typer.Option(help="Comma-separated mega-cap tickers to restrict universe (e.g. NVDA,MSFT)"),
     ] = None,
+    tickers: Annotated[
+        Optional[str],
+        typer.Option(help="Comma-separated child tickers to restrict backtest universe (e.g. STM,SQM,ALB)"),
+    ] = None,
 ) -> None:
     """Walk-forward backtest. IC is the headline metric."""
     from scanner.backtest.runner import run_backtest
 
     parent_list = [p.strip().upper() for p in parents.split(",")] if parents else None
+    ticker_list = [t.strip().upper() for t in tickers.split(",")] if tickers else None
     scope = f"  parents={','.join(parent_list)}" if parent_list else ""
+    if ticker_list:
+        scope += f"  tickers={','.join(ticker_list)}"
     console.print(
         f"[bold cyan]Running walk-forward backtest[/bold cyan]  "
         f"signal={signal}  horizon={horizon}d  lookback={lookback}d{scope}"
@@ -2494,6 +2501,7 @@ def backtest(
             start=start,
             end=end,
             parents=parent_list,
+            tickers=ticker_list,
         )
     except Exception as exc:
         console.print(f"[red]Backtest failed:[/red] {exc}")

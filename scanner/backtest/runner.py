@@ -313,6 +313,7 @@ def run_backtest(
     start: str | None = None,
     end: str | None = None,
     parents: list[str] | None = None,
+    tickers: list[str] | None = None,
 ) -> BacktestResult:
     if signal_name not in SIGNAL_REGISTRY:
         raise ValueError(f"Unknown signal '{signal_name}'. Available: {list(SIGNAL_REGISTRY)}")
@@ -321,6 +322,8 @@ def run_backtest(
     unknown = [p for p in active_parents if p not in MEGA_CAPS]
     if unknown:
         raise ValueError(f"Unknown parent(s): {unknown}. Must be one of {MEGA_CAPS}")
+
+    ticker_filter: set[str] | None = set(tickers) if tickers else None
 
     conn = get_connection()
     all_dates = _get_trading_dates(conn, start or "2000-01-01", end or "2099-01-01")
@@ -342,6 +345,8 @@ def run_backtest(
 
         for parent in active_parents:
             scores = _score_children_on_date(parent, rebal_date, conn, lookback, signal_name)
+            if ticker_filter is not None:
+                scores = {t: s for t, s in scores.items() if t in ticker_filter}
             if not scores:
                 continue
             parent_ret_20d = _rolling_return(parent, rebal_date, 20, conn)
