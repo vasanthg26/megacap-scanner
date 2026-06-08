@@ -473,6 +473,69 @@ Basket   +0.088  +0.188  +0.168      +0.203       +0.131
 - Z×RVOL IC H1:+0.203 H2:+0.131 (WCLD benchmark, validated 2026-06-02)
 - **Do not add to `VALIDATED_THEMES`** — that path fires RS labels; RS H1 is negative for 3/4 tickers
 
+### Critical Minerals & Battery Materials Theme Basket (2026-06-08)
+
+Tickers: SQM, ALB, ALTM, MP
+Benchmark: LIT (Global X Lithium & Battery Tech ETF)
+Signal: Z-score × RVOL
+Added: 2026-06-08
+Status: WATCH — pending IC backtest
+
+Rationale: SQM moved from TSLA dependency (IC -0.055, negative) to commodity theme.
+ALB remains in TSLA dependency AND this basket — different signals, different thesis:
+- TSLA dependency: lithium/EV supply chain RS
+- Battery materials: lithium peer Z-score
+
+**LIT benchmark caveat:** LIT includes both miners and battery tech companies — broader
+than pure lithium. If basket IC is low, consider BATT as alternative benchmark.
+
+**ALTM history caveat:** Arcadium Lithium formed from Livent+Allkem merger Jan 2024.
+Price history may be <1 year — verify depth before treating backtest as statistically meaningful.
+
+**MP Materials note:** Rare earth magnets for EV motors. Different commodity from lithium
+but same EV demand driver. Adds basket diversification.
+
+**Backtest results (20d forward returns, n=1520 basket obs, H1/H2 index split):**
+
+```
+Ticker   IC(RS)  IC(Z)   IC(ZxRVOL)  H1       H2
+SQM      +0.027  +0.051  +0.054      -0.033   +0.140
+ALB      +0.176  +0.321  +0.305      +0.310   +0.029
+ALTM     -0.056  -0.164  -0.140      -0.367   +0.150
+MP       -0.058  -0.089  -0.157      -0.377   -0.084
+------------------------------------------------------
+Basket   -0.004  +0.030  +0.029      +0.154   -0.101
+```
+
+**Decision: FAIL — basket stays WATCH.** H2 = -0.101 (negative; must exceed +0.05).
+- ALB is the only ticker with positive IC in both halves
+- ALTM has only 184 days of history (Arcadium merger Jan 2024) — H1 drags basket down
+- MP has negative IC in both halves — significant basket drag
+- Re-run Dec 2026 when ALTM accumulates full-year history
+
+**Promotion criteria** (same bar as Dev Platforms basket):
+- Basket IC H1 > 0.05 AND H2 > 0.05 → update status to VALIDATED, add to VALIDATED_THEMES
+- Otherwise → stays WATCH
+
+**ALB dual-basket design:** ALB appears in both `critical_minerals_battery` theme AND TSLA
+dependents in `dependencies.yaml`. This is intentional — two independent signals, two
+independent theses. scan-themes uses Z-score; scan uses RS vs TSLA.
+
+### TSLA Dependent Backtest Results (2026-06-08)
+
+STM → TSLA: IC +0.068, CORRECTION IC +0.048
+  Works in UP regime (+0.183) not CORRECTION. Insufficient obs for H1/H2 CORRECTION split.
+  Status: KEEP, revisit Dec 2026.
+
+SQM → TSLA: IC -0.055 ❌ REMOVED
+  Moved to Critical Minerals theme basket. Commodity driver, not Tesla-specific.
+
+ALB → TSLA: IC +0.113, CORRECTION IC +0.380
+  Strong CORRECTION IC. n=32 CORRECTION observations only — directional, not robust.
+  Status: KEEP in both TSLA dependency AND Critical Minerals basket. Revisit Dec 2026.
+
+TSLA not promoted to VALIDATED_PARENTS: insufficient CORRECTION observations. Re-run Dec 2026.
+
 ### Blume Beta Z-Score Research (2026-06-02)
 
 Tested Z_RS x RVOL x Z_beta and Z_RS x RVOL x Z_blume on all theme baskets.

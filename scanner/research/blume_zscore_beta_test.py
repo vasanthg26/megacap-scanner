@@ -48,6 +48,11 @@ BASKETS = [
         "tickers": ["HUT", "WGMI"],
         "benchmark": "WGMI",
     },
+    {
+        "name": "Critical Minerals & Battery Materials",
+        "tickers": ["SQM", "ALB", "ALTM", "MP"],
+        "benchmark": "LIT",
+    },
 ]
 
 # -- Utilities ------------------------------------------------------------------

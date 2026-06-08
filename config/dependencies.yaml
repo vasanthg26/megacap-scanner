@@ -144,12 +144,6 @@ edges:
     notes: Lithium supply for Tesla battery cells
 
   - parent: TSLA
-    child: SQM
-    type: materials
-    weight: 0.7
-    notes: Lithium carbonate supplier for battery production
-
-  - parent: TSLA
     child: STM
     type: semiconductor
     weight: 0.65

@@ -338,6 +338,11 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
             ("dev_platforms_edge_compute",  "NET",  "WCLD", "Developer Platforms & Edge Compute"),
             ("dev_platforms_edge_compute",  "AKAM", "WCLD", "Developer Platforms & Edge Compute"),
             ("dev_platforms_edge_compute",  "DDOG", "WCLD", "Developer Platforms & Edge Compute"),
+            # Critical Minerals & Battery Materials — WATCH pending IC backtest
+            ("critical_minerals_battery",   "SQM",  "LIT",  "Critical Minerals & Battery Materials"),
+            ("critical_minerals_battery",   "ALB",  "LIT",  "Critical Minerals & Battery Materials"),
+            ("critical_minerals_battery",   "ALTM", "LIT",  "Critical Minerals & Battery Materials"),
+            ("critical_minerals_battery",   "MP",   "LIT",  "Critical Minerals & Battery Materials"),
         ]
         for theme_name, ticker, benchmark_etf, theme_label in _THEME_SEED:
             try:

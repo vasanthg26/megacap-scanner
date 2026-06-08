@@ -46,8 +46,10 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "set
 _THEME_TICKERS: list[str] = [
     "BB", "NOK", "AEHR", "HUT", "FPS", "BE", "YSS", "NVTS",  # theme tickers
     "DOCN", "NET", "AKAM", "DDOG",                             # Developer Platforms & Edge Compute
+    "SQM", "ALB", "ALTM", "MP",                               # Critical Minerals & Battery Materials
     "IGV", "IGN", "SMH", "WGMI", "GRID", "XLI", "ITA",       # benchmark ETFs
     "WCLD",                                                     # WisdomTree Cloud Computing ETF
+    "LIT",                                                      # Global X Lithium & Battery Tech ETF
     "SPY",                                                      # needed for theme_active computation
 ]
 
