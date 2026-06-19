@@ -562,26 +562,24 @@ Revisit if theme baskets expand to n>20 tickers.
 Systematic walk-forward IC results per parent, 20d horizon, H1/H2 split at 2025-06-17.
 Signal: beta-adjusted RS (`rs_adj`). Promotion bar: IC H1 > 0.05 AND H2 > 0.05.
 
-### MSFT — CORRECTION ✅ VALIDATED
+### MSFT — CORRECTION ✅ VALIDATED (production)
 - Overall IC: +0.134; CORRECTION H1 and H2 both pass
-- `TRADEABLE_REGIMES = CORRECTION`
-- Status: production (unchanged)
+- `REGIME_MAP["MSFT"] = ["CORRECTION"]`
 
-### META — CORRECTION ✅ VALIDATED
+### META — CORRECTION + MILD_PULLBACK ✅ VALIDATED (production)
 - Overall IC: +0.051; CORRECTION H1 and H2 both pass
-- `TRADEABLE_REGIMES = CORRECTION`
-- Status: production (unchanged)
+- `REGIME_MAP["META"] = ["CORRECTION", "MILD_PULLBACK"]`
 
-### NVDA — UP regime candidate
+### NVDA — UP ✅ VALIDATED (promoted 2026-06-08)
 - Overall IC: +0.050; UP regime H1 +0.070, H2 +0.047 — both pass (726 obs)
-- CORRECTION H2 improving (+0.093) but H1 not yet confirmed
-- Status: PROMOTE UP regime pending review; do not add CORRECTION yet
+- CORRECTION H2 improving (+0.093) but H1 not yet confirmed — do not add CORRECTION yet
+- `REGIME_MAP["NVDA"] = ["UP"]`
 
-### GOOGL — UP + CORRECTION candidate
+### GOOGL — UP + CORRECTION ✅ VALIDATED (promoted 2026-06-08)
 - Overall IC: +0.245 (exceptional)
-- UP regime: H1 +0.383, H2 +0.171 ✅ both pass → PROMOTE UP
-- CORRECTION regime: H1 -0.057, H2 +0.369 — H1 fails; defer CORRECTION
-- Status: PROMOTE UP regime; CORRECTION needs more H1 data
+- UP regime: H1 +0.383, H2 +0.171 ✅ both pass
+- CORRECTION regime: H1 -0.057, H2 +0.369 — H1 weak; included per user review; monitor H1
+- `REGIME_MAP["GOOGL"] = ["UP", "CORRECTION"]`
 
 ### AAPL — MILD_PULLBACK candidate
 - CORRECTION IC: -0.111 ❌ (negative — do not add to CORRECTION)
@@ -624,8 +622,8 @@ Walking back the assumption that all parents share one tradeable regime.
 - Signal: beta-adjusted RS
 
 **Strategy 2 — GROWTH plays** ("parent growing → dependents amplify")
-- Parents: NVDA, GOOGL (candidates — promote UP regime pending review)
-- Gate: UP regime (parent above ATH or near highs)
+- Parents: NVDA, GOOGL (validated 2026-06-08)
+- Gate: UP regime (parent 20d return > 0)
 - Signal: beta-adjusted RS
 
 **Strategy 3 — MILD_PULLBACK plays** ("small dip → supply chain intact, buy the dip")

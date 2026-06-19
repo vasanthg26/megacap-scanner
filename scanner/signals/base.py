@@ -59,11 +59,22 @@ def score_rank(score: float, universe_scores: Sequence[float]) -> tuple[int, int
     return (rank, len(valid))
 
 
+# Legacy flat set kept for backtest compatibility — scan logic uses REGIME_MAP instead.
 TRADEABLE_REGIMES: frozenset[str] = frozenset({"CORRECTION", "MILD_PULLBACK"})
 
-# Parents with demonstrated positive backtest IC (CORRECTION + MILD_PULLBACK regimes only).
-# All other mega-caps are unvalidated — scan shows WAIT labels for their dependents.
-VALIDATED_PARENTS: frozenset[str] = frozenset({"MSFT", "META"})
+# Per-parent tradeable regimes based on walk-forward IC evidence (H1 > 0.05 AND H2 > 0.05).
+# CORRECTION plays: parent falls hard, dependents decouple.
+# UP plays: parent growing, dependents amplify.
+# MILD_PULLBACK plays: small dip, supply chain intact.
+REGIME_MAP: dict[str, list[str]] = {
+    "MSFT":  ["CORRECTION"],
+    "META":  ["CORRECTION", "MILD_PULLBACK"],
+    "NVDA":  ["UP"],
+    "GOOGL": ["UP", "CORRECTION"],
+}
+
+# Parents with demonstrated positive backtest IC. Scan shows WAIT labels for all others.
+VALIDATED_PARENTS: frozenset[str] = frozenset({"MSFT", "META", "NVDA", "GOOGL"})
 
 
 def classify_regime(parent_ret_20d: float) -> str:

@@ -366,7 +366,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
     from scanner.enrichment.insiders import get_insider_summary
     from scanner.signals.base import (
         classify_action, score_rank, classify_regime,
-        TRADEABLE_REGIMES, VALIDATED_PARENTS,
+        REGIME_MAP, VALIDATED_PARENTS,
         calc_basket_zscore,
     )
     from scanner.signals.confirmation import compute_confirmation_dependent
@@ -465,7 +465,7 @@ def _compute_scan_sync(scan_date: str) -> dict:
                 continue
             regime = parent_regimes.get(parent, "UNKNOWN")
             ret_20d = parent_returns.get(parent, float("nan"))
-            is_tradeable = regime in TRADEABLE_REGIMES
+            is_tradeable = regime in REGIME_MAP.get(parent, [])
             is_validated = parent in VALIDATED_PARENTS
 
             rows_out = []
@@ -1593,7 +1593,7 @@ def _capture_journal_sync() -> dict:
     from scanner.enrichment.insiders import get_insider_summary
     from scanner.signals.base import (
         classify_action, score_rank, classify_regime,
-        TRADEABLE_REGIMES, VALIDATED_PARENTS,
+        REGIME_MAP, VALIDATED_PARENTS,
     )
     from scanner.signals.confirmation import compute_confirmation_dependent
 
@@ -1685,7 +1685,7 @@ def _capture_journal_sync() -> dict:
                 continue
             regime = parent_regimes.get(parent, "UNKNOWN")
             ret_20d = parent_returns.get(parent, float("nan"))
-            is_tradeable = regime in TRADEABLE_REGIMES
+            is_tradeable = regime in REGIME_MAP.get(parent, [])
             is_validated = parent in VALIDATED_PARENTS
 
             shown: set[str] = set()

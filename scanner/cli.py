@@ -87,10 +87,10 @@ _REGIME_STYLE = {
 }
 
 _REGIME_NOTES = {
-    "UP":            "signal suppressed, not tradeable",
+    "UP":            "high-confidence signals",
     "MILD_PULLBACK": "moderate signals",
     "CORRECTION":    "high-confidence signals",
-    "DRAWDOWN":      "signal suppressed, not tradeable",
+    "DRAWDOWN":      "signal suppressed",
     "UNKNOWN":       "insufficient data",
 }
 
@@ -899,7 +899,7 @@ def scan(
     from scanner.graph.loader import MEGA_CAPS, get_dependents
     from scanner.signals.relative_strength import RelativeStrengthVsParent
     from scanner.enrichment.insiders import get_insider_summary
-    from scanner.signals.base import Action, classify_action, score_rank, classify_regime, TRADEABLE_REGIMES, VALIDATED_PARENTS, calc_basket_zscore
+    from scanner.signals.base import Action, classify_action, score_rank, classify_regime, REGIME_MAP, VALIDATED_PARENTS, calc_basket_zscore
 
     as_of = scan_date or str(date.today())
     as_of_date = date.fromisoformat(as_of)
@@ -1072,9 +1072,13 @@ def scan(
 
         regime = parent_regimes.get(parent, "UNKNOWN")
         ret_20d = parent_returns.get(parent, float("nan"))
-        is_tradeable = (regime in TRADEABLE_REGIMES) or force_all_regimes
+        is_tradeable = (regime in REGIME_MAP.get(parent, [])) or force_all_regimes
         is_validated = parent in VALIDATED_PARENTS
-        regime_note = "gate overridden" if force_all_regimes else _REGIME_NOTES.get(regime, "")
+        regime_note = (
+            "gate overridden" if force_all_regimes
+            else _REGIME_NOTES.get(regime, "") if is_tradeable
+            else "signal suppressed"
+        )
 
         table = Table(
             title=f"{parent} dependents - regime: {regime} ({regime_note})",
